@@ -30,6 +30,8 @@ interface PlayerDeckProps {
   playerError: string | null;
   crossfadeSeconds: number;
   onChangeCrossfade: (sec: number) => void;
+  introCacheSeconds: number;
+  onChangeIntroCache: (sec: number) => void;
   crossfadeStatus: CrossfadeStatus;
   masterVolume: number;
   onChangeVolume: (vol: number) => void;
@@ -51,6 +53,7 @@ interface PlayerDeckProps {
 }
 
 const CROSSFADE_OPTIONS = [0, 2, 4, 6, 8, 10];
+const INTRO_CACHE_OPTIONS = [0, 5, 8, 12, 15];
 
 export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   currentTrack,
@@ -62,6 +65,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   playerError,
   crossfadeSeconds,
   onChangeCrossfade,
+  introCacheSeconds,
+  onChangeIntroCache,
   crossfadeStatus,
   masterVolume,
   onChangeVolume,
@@ -200,7 +205,13 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
       )}
 
       {playerError && (
-        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+        <div
+          className={`rounded-xl border px-3 py-2 text-xs ${
+            playerError.includes('Reintentando')
+              ? 'border-amber-500/35 bg-amber-500/10 text-amber-200'
+              : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+          }`}
+        >
           {playerError}
         </div>
       )}
@@ -358,6 +369,32 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
               onClick={() => onChangeCrossfade(sec)}
               className={`min-h-[40px] rounded-lg text-xs font-mono-tabular border transition ${
                 crossfadeSeconds === sec
+                  ? 'border-[#D99B38] bg-[#D99B38] text-[#0D0E11] font-semibold'
+                  : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
+              }`}
+            >
+              {sec === 0 ? 'Off' : `${sec}s`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Instant intro cache selector */}
+      <div className="pt-2 border-t border-white/8 space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-[#C7C2B6] font-medium">Inicio instantáneo (precarga)</span>
+          <span className="font-mono-tabular text-[#F2BE63]">
+            {introCacheSeconds === 0 ? 'Desactivado' : `${introCacheSeconds}s`}
+          </span>
+        </div>
+        <div className="grid grid-cols-5 gap-1">
+          {INTRO_CACHE_OPTIONS.map((sec) => (
+            <button
+              key={sec}
+              type="button"
+              onClick={() => onChangeIntroCache(sec)}
+              className={`min-h-[40px] rounded-lg text-xs font-mono-tabular border transition ${
+                introCacheSeconds === sec
                   ? 'border-[#D99B38] bg-[#D99B38] text-[#0D0E11] font-semibold'
                   : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
               }`}

@@ -62,6 +62,14 @@ export default function App() {
 
   const currentFolderTracks = library.getFolderTracks(library.selectedFolderId);
 
+  // Pre-warm first X seconds of tracks in the active folder so playback starts instantaneously
+  useEffect(() => {
+    if (player.introCacheSeconds > 0 && currentFolderTracks.length > 0) {
+      player.warmTracks(currentFolderTracks);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [library.selectedFolderId, currentFolderTracks.length, player.introCacheSeconds]);
+
   const cycleLoopMode = () => {
     const order: LoopMode[] = ['folder', 'track', 'none'];
     const next = order[(order.indexOf(player.loopMode) + 1) % order.length];
@@ -250,6 +258,8 @@ export default function App() {
                 playerError={player.playerError}
                 crossfadeSeconds={player.crossfadeSeconds}
                 onChangeCrossfade={player.setCrossfadeSeconds}
+                introCacheSeconds={player.introCacheSeconds}
+                onChangeIntroCache={player.setIntroCacheSeconds}
                 crossfadeStatus={player.crossfadeStatus}
                 masterVolume={player.masterVolume}
                 onChangeVolume={player.setMasterVolume}
@@ -351,6 +361,8 @@ export default function App() {
               playerError={player.playerError}
               crossfadeSeconds={player.crossfadeSeconds}
               onChangeCrossfade={player.setCrossfadeSeconds}
+              introCacheSeconds={player.introCacheSeconds}
+              onChangeIntroCache={player.setIntroCacheSeconds}
               crossfadeStatus={player.crossfadeStatus}
               masterVolume={player.masterVolume}
               onChangeVolume={player.setMasterVolume}
