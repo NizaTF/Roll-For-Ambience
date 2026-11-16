@@ -1,6 +1,7 @@
 export type AudioSourceType = 'audius' | 'youtube' | 'direct';
 
 export type FolderIconName =
+  // Legacy & Core
   | 'beer'
   | 'sword'
   | 'shield'
@@ -27,7 +28,64 @@ export type FolderIconName =
   | 'sun'
   | 'scroll'
   | 'eye'
-  | 'music';
+  | 'music'
+  // Lugares y Arquitectura
+  | 'wine'
+  | 'utensils'
+  | 'landmark'
+  | 'tower'
+  | 'home'
+  | 'warehouse'
+  // Entornos y Biomas
+  | 'treePine'
+  | 'treeDeciduous'
+  | 'leaf'
+  | 'sprout'
+  | 'flower'
+  | 'mountainSnow'
+  | 'palmtree'
+  | 'wind'
+  | 'tornado'
+  | 'cloudLightning'
+  | 'droplets'
+  // Monstruos y Criaturas
+  | 'bone'
+  | 'rat'
+  | 'bug'
+  | 'worm'
+  | 'biohazard'
+  | 'bird'
+  | 'dog'
+  | 'cat'
+  | 'fish'
+  // Combate y Armas
+  | 'swordSingle'
+  | 'axe'
+  | 'hammer'
+  | 'bow'
+  | 'shieldAlert'
+  | 'target'
+  // Magia, Reliquias y Objetos
+  | 'book'
+  | 'feather'
+  | 'key'
+  | 'lock'
+  | 'hourglass'
+  | 'bell'
+  | 'scale'
+  // Aventura, Navegación y Rol
+  | 'signpost'
+  | 'footprints'
+  | 'ship'
+  | 'sailboat'
+  | 'caravan'
+  | 'dices'
+  | 'mask'
+  | 'drama'
+  | 'flag'
+  | 'award'
+  | 'heart'
+  | 'drum';
 
 export interface Track {
   id: string;

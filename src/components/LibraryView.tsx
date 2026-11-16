@@ -19,7 +19,8 @@ import {
 } from 'lucide-react';
 import { formatDuration } from '../services/freeMusicApi';
 import { Folder, FolderIconName, Track } from '../types/audio';
-import { FOLDER_ICON_OPTIONS, FolderIcon } from './FolderIcon';
+import { FolderIcon } from './FolderIcon';
+import { FolderIconGallery } from './FolderIconGallery';
 
 interface LibraryViewProps {
   folders: Folder[];
@@ -515,28 +516,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               />
             </div>
 
-            <div className="min-h-0 flex-1 flex flex-col">
-              <span className="block text-xs text-[#9C988E] mb-2 shrink-0">
-                Elige un icono ({FOLDER_ICON_OPTIONS.length} disponibles)
-              </span>
-              <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 overflow-y-auto pr-1">
-                {FOLDER_ICON_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setNewIcon(opt.value)}
-                    className={`min-h-[54px] px-1.5 py-2 rounded-xl border text-xs flex flex-col items-center justify-center gap-1 transition ${
-                      newIcon === opt.value
-                        ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-                        : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
-                    }`}
-                  >
-                    <FolderIcon name={opt.value} className="w-4 h-4" />
-                    <span className="text-[10px] truncate max-w-full">{opt.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <FolderIconGallery value={newIcon} onChange={setNewIcon} />
 
             <button
               type="submit"
@@ -573,41 +553,25 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </button>
             </div>
 
-            <div className="shrink-0">
-              <label className="block text-xs text-[#9C988E] mb-1.5">
-                Nombre de la carpeta
-              </label>
-              <input
-                type="text"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                autoFocus
-                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] focus:outline-none focus:border-[#D99B38]"
-              />
-            </div>
-
-            <div className="min-h-0 flex-1 flex flex-col">
-              <span className="block text-xs text-[#9C988E] mb-2 shrink-0">
-                Icono de la carpeta
+            <div className="shrink-0 flex items-center gap-2.5">
+              <span className="w-11 h-11 rounded-xl bg-[#0D0E11] border border-[#D99B38]/40 text-[#F2BE63] flex items-center justify-center shrink-0">
+                <FolderIcon name={editIcon} className="w-5 h-5" />
               </span>
-              <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 overflow-y-auto pr-1">
-                {FOLDER_ICON_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEditIcon(opt.value)}
-                    className={`min-h-[54px] px-1.5 py-2 rounded-xl border text-xs flex flex-col items-center justify-center gap-1 transition ${
-                      editIcon === opt.value
-                        ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-                        : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
-                    }`}
-                  >
-                    <FolderIcon name={opt.value} className="w-4 h-4" />
-                    <span className="text-[10px] truncate max-w-full">{opt.label}</span>
-                  </button>
-                ))}
+              <div className="flex-1 min-w-0">
+                <label className="block text-xs text-[#9C988E] mb-1">
+                  Nombre de la carpeta
+                </label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  autoFocus
+                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] focus:outline-none focus:border-[#D99B38]"
+                />
               </div>
             </div>
+
+            <FolderIconGallery value={editIcon} onChange={setEditIcon} />
 
             <button
               type="submit"

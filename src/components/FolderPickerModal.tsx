@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Check, FolderPlus, X } from 'lucide-react';
 import { Folder, FolderIconName, Track } from '../types/audio';
-import { FOLDER_ICON_OPTIONS, FolderIcon } from './FolderIcon';
+import { FolderIcon } from './FolderIcon';
+import { FolderIconGallery } from './FolderIconGallery';
 
 interface FolderPickerModalProps {
   track: Track | null;
@@ -133,23 +134,11 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                 Crear
               </button>
             </div>
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              {FOLDER_ICON_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setNewFolderIcon(opt.value)}
-                  title={opt.label}
-                  className={`min-w-[40px] min-h-[40px] rounded-lg border flex items-center justify-center shrink-0 transition ${
-                    newFolderIcon === opt.value
-                      ? 'border-[#D99B38] bg-[#D99B38]/20 text-[#F2BE63]'
-                      : 'border-white/8 bg-[#0D0E11] text-[#9C988E]'
-                  }`}
-                >
-                  <FolderIcon name={opt.value} className="w-4 h-4" />
-                </button>
-              ))}
-            </div>
+            <FolderIconGallery
+              value={newFolderIcon}
+              onChange={setNewFolderIcon}
+              compact
+            />
           </form>
         ) : (
           <button
