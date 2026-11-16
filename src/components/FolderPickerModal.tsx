@@ -8,8 +8,11 @@ interface FolderPickerModalProps {
   track: Track | null;
   folders: Folder[];
   containingFolderIds: string[];
+  isSaved?: boolean;
   onClose: () => void;
+  onSaveTrackOnly?: (track: Track) => void;
   onAddTrackToFolder: (track: Track, folderId: string) => void;
+  onAddTrackToFolders?: (track: Track, folderIds: string[]) => void;
   onRemoveTrackFromFolder: (trackId: string, folderId: string) => void;
   onCreateFolder: (name: string, icon: FolderIconName) => Folder | null;
 }
@@ -18,8 +21,11 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
   track,
   folders,
   containingFolderIds,
+  isSaved = false,
   onClose,
+  onSaveTrackOnly,
   onAddTrackToFolder,
+  onAddTrackToFolders,
   onRemoveTrackFromFolder,
   onCreateFolder,
 }) => {
@@ -55,7 +61,11 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs text-[#9C988E]">
-              Carpetas de la canción · puedes marcar varias a la vez ({containingFolderIds.length})
+              Elige 1 o varias carpetas ·{' '}
+              <span className="text-[#F2BE63] font-medium">
+                {containingFolderIds.length}{' '}
+                {containingFolderIds.length === 1 ? 'seleccionada' : 'seleccionadas'}
+              </span>
             </p>
             <h3 className="font-display text-lg font-semibold text-[#F2F0EB] truncate">
               {track.title}
@@ -71,7 +81,39 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           </button>
         </div>
 
-        <div className="mt-4 space-y-1.5 overflow-y-auto flex-1 pr-1">
+        {folders.length > 1 && (
+          <div className="mt-3 flex items-center justify-end gap-3 text-xs">
+            {containingFolderIds.length < folders.length && onAddTrackToFolders && (
+              <button
+                type="button"
+                onClick={() =>
+                  onAddTrackToFolders(
+                    track,
+                    folders.map((f) => f.id)
+                  )
+                }
+                className="text-[#F2BE63] hover:underline"
+              >
+                Marcar todas
+              </button>
+            )}
+            {containingFolderIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  containingFolderIds.forEach((fid) =>
+                    onRemoveTrackFromFolder(track.id, fid)
+                  )
+                }
+                className="text-[#9C988E] hover:text-[#F2F0EB]"
+              >
+                Desmarcar todas
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="mt-2.5 space-y-1.5 overflow-y-auto flex-1 pr-1">
           {folders.map((folder) => {
             const isIn = containingFolderIds.includes(folder.id);
             return (
@@ -151,12 +193,33 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           </button>
         )}
 
+        {!isSaved && containingFolderIds.length === 0 && onSaveTrackOnly && (
+          <button
+            type="button"
+            onClick={() => {
+              onSaveTrackOnly(track);
+              onClose();
+            }}
+            className="mt-3 w-full min-h-[42px] rounded-xl border border-white/10 text-xs font-medium text-[#C7C2B6] hover:text-[#F2F0EB] hover:bg-white/5 transition"
+          >
+            Guardar solo en Todas (sin carpeta)
+          </button>
+        )}
+
         <button
           type="button"
           onClick={onClose}
-          className="mt-3 w-full min-h-[46px] rounded-xl bg-[#1E2128] text-sm font-semibold text-[#F2F0EB] hover:bg-[#262A33] transition"
+          className={`mt-2.5 w-full min-h-[46px] rounded-xl text-sm font-semibold transition ${
+            containingFolderIds.length > 0
+              ? 'bg-[#D99B38] text-[#0D0E11] hover:bg-[#F2BE63]'
+              : 'bg-[#1E2128] text-[#F2F0EB] hover:bg-[#262A33]'
+          }`}
         >
-          Listo
+          {containingFolderIds.length > 0
+            ? `Listo (${containingFolderIds.length} ${
+                containingFolderIds.length === 1 ? 'carpeta' : 'carpetas'
+              })`
+            : 'Cerrar'}
         </button>
       </div>
     </div>

@@ -19,6 +19,7 @@ import {
   searchAudiusTracks,
 } from '../services/freeMusicApi';
 import { Folder, Track } from '../types/audio';
+import { FolderIcon } from './FolderIcon';
 
 interface SearchViewProps {
   allTracks: Track[];
@@ -28,7 +29,7 @@ interface SearchViewProps {
   isPlaying: boolean;
   isTrackSaved: (trackId: string) => boolean;
   getFoldersContainingTrack: (trackId: string) => string[];
-  onSaveTrackToFolder: (track: Track, folderId: string) => void;
+  onSaveTrackToFolders: (track: Track, folderIds: string[]) => void;
   onPlayTrack: (track: Track, queue: Track[], queueName: string) => void;
   onTogglePlay: () => void;
   onOpenFolderPicker: (track: Track) => void;
@@ -53,7 +54,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   isPlaying,
   isTrackSaved,
   getFoldersContainingTrack,
-  onSaveTrackToFolder,
+  onSaveTrackToFolders,
   onPlayTrack,
   onTogglePlay,
   onOpenFolderPicker,
@@ -70,13 +71,27 @@ export const SearchView: React.FC<SearchViewProps> = ({
   // YouTube / Direct URL paste state
   const [urlInput, setUrlInput] = useState('');
   const [customTitle, setCustomTitle] = useState('');
-  const [targetFolderId, setTargetFolderId] = useState<string>(() =>
-    selectedFolderId !== 'all' ? selectedFolderId : folders[0]?.id || 'all'
-  );
+  const [targetFolderIds, setTargetFolderIds] = useState<string[]>(() => {
+    if (selectedFolderId !== 'all') return [selectedFolderId];
+    return folders[0] ? [folders[0].id] : [];
+  });
   const [ytSearchHelper, setYtSearchHelper] = useState('dnd tavern ambience');
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
+  const validTargetFolderIds = useMemo(() => {
+    const existing = new Set(folders.map((f) => f.id));
+    return targetFolderIds.filter((id) => existing.has(id));
+  }, [folders, targetFolderIds]);
+
+  const toggleTargetFolder = (folderId: string) => {
+    setTargetFolderIds((prev) =>
+      prev.includes(folderId)
+        ? prev.filter((id) => id !== folderId)
+        : [...prev, folderId]
+    );
+  };
 
   // Local library search
   const [libQuery, setLibQuery] = useState('');
@@ -159,14 +174,16 @@ export const SearchView: React.FC<SearchViewProps> = ({
         };
       }
 
-      // Immediately persist the track in the chosen folder (and in All Tracks)
-      onSaveTrackToFolder(track, targetFolderId);
-      const folderName =
-        targetFolderId === 'all'
-          ? 'Todas'
-          : folders.find((f) => f.id === targetFolderId)?.name || 'tu biblioteca';
+      // Immediately persist the track in all selected folders (and in All Tracks)
+      onSaveTrackToFolders(track, validTargetFolderIds);
+      const chosenNames = folders
+        .filter((f) => validTargetFolderIds.includes(f.id))
+        .map((f) => f.name);
 
-      setSavedNotice(`"${track.title}" guardada en ${folderName}`);
+      const destinationText =
+        chosenNames.length > 0 ? chosenNames.join(', ') : 'Todas las canciones';
+
+      setSavedNotice(`"${track.title}" guardada en ${destinationText}`);
       setUrlInput('');
       setCustomTitle('');
       onPlayTrack(track, [track, ...savedYoutubeTracks], 'YouTube guardadas');
@@ -254,7 +271,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
         <button
           type="button"
           onClick={() => onOpenFolderPicker(track)}
-          aria-label="Guardar en carpeta"
+          aria-label="Elegir una o varias carpetas para guardar"
           className={`min-h-[44px] px-3 rounded-xl border text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition ${
             saved
               ? 'border-[#D99B38]/50 bg-[#D99B38]/12 text-[#F2BE63]'
@@ -262,7 +279,13 @@ export const SearchView: React.FC<SearchViewProps> = ({
           }`}
         >
           {saved ? <Check className="w-4 h-4" /> : <FolderPlus className="w-4 h-4" />}
-          <span>{folderCount > 0 ? `Carpetas (${folderCount})` : saved ? 'Guardada' : 'Guardar'}</span>
+          <span>
+            {folderCount > 0
+              ? `${folderCount} ${folderCount === 1 ? 'carpeta' : 'carpetas'}`
+              : saved
+              ? 'Guardada'
+              : 'Guardar'}
+          </span>
         </button>
       </div>
     );
@@ -414,37 +437,89 @@ export const SearchView: React.FC<SearchViewProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-[#9C988E] mb-1.5">
-                  Título personalizado (opcional)
+            <div>
+              <label className="block text-xs text-[#9C988E] mb-1.5">
+                Título personalizado (opcional)
+              </label>
+              <input
+                type="text"
+                value={customTitle}
+                onChange={(e) => setCustomTitle(e.target.value)}
+                placeholder="Ej. Emboscada en el camino"
+                className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/12 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs text-[#9C988E]">
+                  Guardar en carpetas ({validTargetFolderIds.length}{' '}
+                  {validTargetFolderIds.length === 1 ? 'seleccionada' : 'seleccionadas'})
                 </label>
-                <input
-                  type="text"
-                  value={customTitle}
-                  onChange={(e) => setCustomTitle(e.target.value)}
-                  placeholder="Ej. Emboscada en el camino"
-                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/12 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
-                />
+                {folders.length > 0 && (
+                  <div className="flex items-center gap-2 text-[11px]">
+                    {validTargetFolderIds.length < folders.length ? (
+                      <button
+                        type="button"
+                        onClick={() => setTargetFolderIds(folders.map((f) => f.id))}
+                        className="text-[#F2BE63] hover:underline"
+                      >
+                        Todas
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setTargetFolderIds([])}
+                        className="text-[#9C988E] hover:text-[#F2F0EB]"
+                      >
+                        Ninguna
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
-              <div>
-                <label className="block text-xs text-[#9C988E] mb-1.5">
-                  Guardar en carpeta
-                </label>
-                <select
-                  value={targetFolderId}
-                  onChange={(e) => setTargetFolderId(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-xl bg-[#0D0E11] border border-white/12 text-sm text-[#F2F0EB] focus:outline-none focus:border-[#D99B38]"
-                >
-                  {folders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                  <option value="all">Solo en Todas</option>
-                </select>
-              </div>
+              {folders.length === 0 ? (
+                <p className="text-xs text-[#8C887E] rounded-xl bg-[#0D0E11] border border-white/8 px-3 py-2.5">
+                  No tienes carpetas creadas todavía. Se guardará en Todas.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {folders.map((folder) => {
+                    const selected = validTargetFolderIds.includes(folder.id);
+                    return (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => toggleTargetFolder(folder.id)}
+                        className={`min-h-[40px] px-3 py-1.5 rounded-xl border text-xs font-medium inline-flex items-center gap-2 transition ${
+                          selected
+                            ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
+                            : 'border-white/10 bg-[#0D0E11] text-[#C7C2B6] hover:border-white/25 hover:text-[#F2F0EB]'
+                        }`}
+                      >
+                        <FolderIcon name={folder.icon} className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate max-w-[140px]">{folder.name}</span>
+                        <span
+                          className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
+                            selected
+                              ? 'bg-[#D99B38] text-[#0D0E11]'
+                              : 'border border-white/20 text-transparent'
+                          }`}
+                        >
+                          <Check className="w-2.5 h-2.5" />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {folders.length > 0 && validTargetFolderIds.length === 0 && (
+                <p className="text-[11px] text-[#8C887E]">
+                  Sin carpetas marcadas: se guardará únicamente en Todas.
+                </p>
+              )}
             </div>
 
             {urlError && <p className="text-xs text-rose-400">{urlError}</p>}

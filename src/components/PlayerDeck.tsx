@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   ChevronDown,
+  FolderPlus,
   Loader2,
   Pause,
   Play,
@@ -45,6 +46,7 @@ interface PlayerDeckProps {
   onSkipBy: (delta: number) => void;
   onNext: () => void;
   onPrev: () => void;
+  onOpenFolderPicker?: (track: Track) => void;
   onCloseSheet?: () => void;
 }
 
@@ -76,6 +78,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   onSkipBy,
   onNext,
   onPrev,
+  onOpenFolderPicker,
   onCloseSheet,
 }) => {
   const safeDuration = duration > 0 ? duration : 0;
@@ -138,20 +141,34 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           </p>
         </div>
 
-        {currentTrack?.source === 'youtube' && (
-          <button
-            type="button"
-            onClick={onToggleYoutubeFrame}
-            className={`min-h-[40px] px-2.5 rounded-xl border text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition ${
-              showYoutubeFrame
-                ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-                : 'border-white/10 bg-[#1E2128] text-[#C7C2B6]'
-            }`}
-          >
-            <Video className="w-3.5 h-3.5" />
-            <span>Vídeo</span>
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {currentTrack && onOpenFolderPicker && (
+            <button
+              type="button"
+              onClick={() => onOpenFolderPicker(currentTrack)}
+              aria-label="Guardar o cambiar carpetas de esta canción"
+              title="Guardar en una o varias carpetas"
+              className="min-w-[40px] min-h-[40px] rounded-xl border border-white/10 bg-[#1E2128] text-[#C7C2B6] hover:border-[#D99B38]/60 hover:text-[#F2BE63] flex items-center justify-center transition"
+            >
+              <FolderPlus className="w-4 h-4" />
+            </button>
+          )}
+
+          {currentTrack?.source === 'youtube' && (
+            <button
+              type="button"
+              onClick={onToggleYoutubeFrame}
+              className={`min-h-[40px] px-2.5 rounded-xl border text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition ${
+                showYoutubeFrame
+                  ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
+                  : 'border-white/10 bg-[#1E2128] text-[#C7C2B6]'
+              }`}
+            >
+              <Video className="w-3.5 h-3.5" />
+              <span>Vídeo</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Active crossfade indicator */}

@@ -180,6 +180,22 @@ export function useLibraryStore() {
     });
   }, []);
 
+  const addTrackToFolders = useCallback((track: Track, folderIds: string[]) => {
+    const idSet = new Set(folderIds.filter((id) => id && id !== 'all'));
+    setLibrary((prev) => {
+      const nextTracks = { ...prev.tracks, [track.id]: track };
+      const nextFolders = prev.folders.map((f) => {
+        if (!idSet.has(f.id)) return f;
+        if (f.trackIds.includes(track.id)) return f;
+        return { ...f, trackIds: [...f.trackIds, track.id] };
+      });
+      return {
+        tracks: nextTracks,
+        folders: nextFolders,
+      };
+    });
+  }, []);
+
   const setTrackFolders = useCallback((track: Track, folderIds: string[]) => {
     const idSet = new Set(folderIds);
     setLibrary((prev) => {
@@ -373,6 +389,7 @@ export function useLibraryStore() {
     deleteFolder,
     saveTrack,
     addTrackToFolder,
+    addTrackToFolders,
     setTrackFolders,
     removeTrackFromFolder,
     moveTrackInFolder,

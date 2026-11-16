@@ -212,7 +212,7 @@ export default function App() {
                 isPlaying={player.isPlaying}
                 isTrackSaved={library.isTrackSaved}
                 getFoldersContainingTrack={library.getFoldersContainingTrack}
-                onSaveTrackToFolder={library.addTrackToFolder}
+                onSaveTrackToFolders={library.addTrackToFolders}
                 onPlayTrack={handlePlayTrack}
                 onTogglePlay={player.togglePlay}
                 onOpenFolderPicker={(t) => setPickerTrack(t)}
@@ -266,6 +266,7 @@ export default function App() {
                 onSkipBy={player.skipBy}
                 onNext={player.nextTrack}
                 onPrev={player.prevTrack}
+                onOpenFolderPicker={(t) => setPickerTrack(t)}
               />
             </div>
           </aside>
@@ -366,6 +367,7 @@ export default function App() {
               onSkipBy={player.skipBy}
               onNext={player.nextTrack}
               onPrev={player.prevTrack}
+              onOpenFolderPicker={(t) => setPickerTrack(t)}
               onCloseSheet={() => setPlayerSheetOpen(false)}
             />
           </div>
@@ -379,8 +381,11 @@ export default function App() {
         containingFolderIds={
           pickerTrack ? library.getFoldersContainingTrack(pickerTrack.id) : []
         }
+        isSaved={pickerTrack ? library.isTrackSaved(pickerTrack.id) : false}
         onClose={() => setPickerTrack(null)}
+        onSaveTrackOnly={library.saveTrack}
         onAddTrackToFolder={library.addTrackToFolder}
+        onAddTrackToFolders={library.addTrackToFolders}
         onRemoveTrackFromFolder={library.removeTrackFromFolder}
         onCreateFolder={library.createFolder}
       />
