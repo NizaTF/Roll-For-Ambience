@@ -16,6 +16,16 @@ interface LibraryStorage {
   folders: Folder[];
 }
 
+interface ExportedPlaylist {
+  format: 'rfa-playlist-v1';
+  exportedAt: number;
+  folder: {
+    name: string;
+    icon: FolderIconName;
+  };
+  tracks: Track[];
+}
+
 function getStarterLibrary(): LibraryStorage {
   const tracks: Record<string, Track> = {};
   for (const t of STARTER_TRACKS) {
@@ -47,7 +57,6 @@ export function useLibraryStore() {
   });
   const hydratedRef = useRef(false);
 
-  // Hydrate from IndexedDB if localStorage was empty/cleared on Android
   useEffect(() => {
     requestAndroidPersistentStorage();
     const hasLocal = Boolean(loadLocalStorageJSON<LibraryStorage>(STORAGE_KEY));
@@ -110,14 +119,30 @@ export function useLibraryStore() {
     return newFolder;
   }, []);
 
-  const renameFolder = useCallback((folderId: string, newName: string) => {
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-    setLibrary((prev) => ({
-      ...prev,
-      folders: prev.folders.map((f) => (f.id === folderId ? { ...f, name: trimmed } : f)),
-    }));
-  }, []);
+  const updateFolder = useCallback(
+    (folderId: string, updates: { name?: string; icon?: FolderIconName }) => {
+      setLibrary((prev) => ({
+        ...prev,
+        folders: prev.folders.map((f) => {
+          if (f.id !== folderId) return f;
+          const nextName =
+            typeof updates.name === 'string' && updates.name.trim()
+              ? updates.name.trim()
+              : f.name;
+          const nextIcon = updates.icon || f.icon;
+          return { ...f, name: nextName, icon: nextIcon };
+        }),
+      }));
+    },
+    []
+  );
+
+  const renameFolder = useCallback(
+    (folderId: string, newName: string) => {
+      updateFolder(folderId, { name: newName });
+    },
+    [updateFolder]
+  );
 
   const deleteFolder = useCallback((folderId: string) => {
     setLibrary((prev) => ({
@@ -152,6 +177,25 @@ export function useLibraryStore() {
         tracks: nextTracks,
         folders: nextFolders,
       };
+    });
+  }, []);
+
+  const setTrackFolders = useCallback((track: Track, folderIds: string[]) => {
+    const idSet = new Set(folderIds);
+    setLibrary((prev) => {
+      const nextTracks = { ...prev.tracks, [track.id]: track };
+      const nextFolders = prev.folders.map((f) => {
+        const shouldHave = idSet.has(f.id);
+        const currentlyHas = f.trackIds.includes(track.id);
+        if (shouldHave && !currentlyHas) {
+          return { ...f, trackIds: [...f.trackIds, track.id] };
+        }
+        if (!shouldHave && currentlyHas) {
+          return { ...f, trackIds: f.trackIds.filter((id) => id !== track.id) };
+        }
+        return f;
+      });
+      return { tracks: nextTracks, folders: nextFolders };
     });
   }, []);
 
@@ -213,25 +257,101 @@ export function useLibraryStore() {
     [library.tracks]
   );
 
+  const exportPlaylist = useCallback(
+    (folderId: string): string => {
+      const folder = library.folders.find((f) => f.id === folderId);
+      const tracks = getFolderTracks(folderId);
+      const payload: ExportedPlaylist = {
+        format: 'rfa-playlist-v1',
+        exportedAt: Date.now(),
+        folder: {
+          name: folder ? folder.name : 'Todas las canciones',
+          icon: folder ? folder.icon : 'music',
+        },
+        tracks,
+      };
+      return JSON.stringify(payload, null, 2);
+    },
+    [getFolderTracks, library.folders]
+  );
+
   const exportBackup = useCallback((): string => {
     return JSON.stringify(library, null, 2);
   }, [library]);
 
-  const importBackup = useCallback((jsonText: string): boolean => {
-    try {
-      const parsed = JSON.parse(jsonText) as LibraryStorage;
-      if (!parsed || typeof parsed.tracks !== 'object' || !Array.isArray(parsed.folders)) {
-        return false;
+  const importListOrBackup = useCallback(
+    (jsonText: string): { ok: boolean; message: string } => {
+      try {
+        const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+        if (!parsed || typeof parsed !== 'object') {
+          return { ok: false, message: 'Archivo JSON no válido' };
+        }
+
+        // Case 1: Single exported playlist
+        if (
+          parsed.format === 'rfa-playlist-v1' &&
+          parsed.folder &&
+          Array.isArray(parsed.tracks)
+        ) {
+          const folderMeta = parsed.folder as { name?: string; icon?: FolderIconName };
+          const incomingTracks = parsed.tracks as Track[];
+          const validTracks = incomingTracks.filter(
+            (t) => t && typeof t.id === 'string' && typeof t.title === 'string' && typeof t.url === 'string'
+          );
+
+          const newFolderId = `folder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const newFolder: Folder = {
+            id: newFolderId,
+            name: (folderMeta.name || 'Lista importada').trim(),
+            icon: folderMeta.icon || 'music',
+            trackIds: validTracks.map((t) => t.id),
+            createdAt: Date.now(),
+          };
+
+          setLibrary((prev) => {
+            const mergedTracks = { ...prev.tracks };
+            for (const t of validTracks) {
+              mergedTracks[t.id] = t;
+            }
+            return {
+              tracks: mergedTracks,
+              folders: [...prev.folders, newFolder],
+            };
+          });
+          setSelectedFolderId(newFolderId);
+          return {
+            ok: true,
+            message: `Lista "${newFolder.name}" importada (${validTracks.length} pistas)`,
+          };
+        }
+
+        // Case 2: Full library backup
+        if (parsed.tracks && typeof parsed.tracks === 'object' && Array.isArray(parsed.folders)) {
+          const full = parsed as unknown as LibraryStorage;
+          setLibrary(full);
+          if (full.folders[0]) {
+            setSelectedFolderId(full.folders[0].id);
+          }
+          return {
+            ok: true,
+            message: `Biblioteca completa restaurada (${full.folders.length} carpetas)`,
+          };
+        }
+
+        return { ok: false, message: 'Formato de lista no reconocido' };
+      } catch {
+        return { ok: false, message: 'No se pudo leer el archivo JSON' };
       }
-      setLibrary(parsed);
-      if (parsed.folders[0]) {
-        setSelectedFolderId(parsed.folders[0].id);
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
+    },
+    []
+  );
+
+  const importBackup = useCallback(
+    (jsonText: string): boolean => {
+      return importListOrBackup(jsonText).ok;
+    },
+    [importListOrBackup]
+  );
 
   const resetToStarter = useCallback(() => {
     const starter = getStarterLibrary();
@@ -248,15 +368,19 @@ export function useLibraryStore() {
     activeFolder,
     getFolderTracks,
     createFolder,
+    updateFolder,
     renameFolder,
     deleteFolder,
     saveTrack,
     addTrackToFolder,
+    setTrackFolders,
     removeTrackFromFolder,
     moveTrackInFolder,
     getFoldersContainingTrack,
     isTrackSaved,
+    exportPlaylist,
     exportBackup,
+    importListOrBackup,
     importBackup,
     resetToStarter,
   };

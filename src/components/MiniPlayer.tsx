@@ -49,7 +49,9 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
           </div>
           <div className="text-[11px] text-[#9C988E] truncate">
             {crossfadeStatus.active
-              ? `Fundido (${crossfadeStatus.durationSec}s)...`
+              ? crossfadeStatus.phase === 'loading'
+                ? `Cargando ${crossfadeStatus.toTitle || 'siguiente'}...`
+                : `Fundido (${crossfadeStatus.durationSec}s)...`
               : currentTrack.artist}
           </div>
         </button>

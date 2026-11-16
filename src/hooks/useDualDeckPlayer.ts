@@ -3,7 +3,7 @@ import { CrossfadeStatus, LoopMode, Track } from '../types/audio';
 
 interface YTPlayer {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
-  cueVideoById: (videoId: string) => void;
+  cueVideoById: (videoId: string, startSeconds?: number) => void;
   playVideo: () => void;
   pauseVideo: () => void;
   stopVideo: () => void;
@@ -55,7 +55,9 @@ interface DeckInstance {
   track: Track | null;
 }
 
-const PREFS_KEY = 'bardo_dnd_player_prefs_v1';
+const PREFS_KEY = 'rfa_dnd_player_prefs_v1';
+const LEGACY_PREFS_KEY = 'bardo_dnd_player_prefs_v1';
+const PLAYBACK_SNAPSHOT_KEY = 'rfa_dnd_playback_snapshot_v1';
 
 interface PlayerPrefs {
   crossfadeSeconds: number;
@@ -64,9 +66,19 @@ interface PlayerPrefs {
   shuffle: boolean;
 }
 
+interface PlaybackSnapshot {
+  track: Track;
+  queue: Track[];
+  queueName: string;
+  currentTime: number;
+  duration: number;
+  wasPlaying: boolean;
+  savedAt: number;
+}
+
 function loadPrefs(): PlayerPrefs {
   try {
-    const raw = localStorage.getItem(PREFS_KEY);
+    const raw = localStorage.getItem(PREFS_KEY) || localStorage.getItem(LEGACY_PREFS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
@@ -90,6 +102,20 @@ function loadPrefs(): PlayerPrefs {
     loopMode: 'folder',
     shuffle: false,
   };
+}
+
+function loadPlaybackSnapshot(): PlaybackSnapshot | null {
+  try {
+    const raw = localStorage.getItem(PLAYBACK_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PlaybackSnapshot;
+    if (parsed && parsed.track && typeof parsed.track.url === 'string') {
+      return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 let ytApiPromise: Promise<void> | null = null;
@@ -123,16 +149,26 @@ function loadYouTubeIframeAPI(): Promise<void> {
 
 export function useDualDeckPlayer() {
   const initialPrefs = useRef(loadPrefs()).current;
+  const initialSnapshot = useRef(loadPlaybackSnapshot()).current;
 
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
-  const [queue, setQueue] = useState<Track[]>([]);
-  const [queueName, setQueueName] = useState<string>('Biblioteca');
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(
+    initialSnapshot?.track || null
+  );
+  const [queue, setQueue] = useState<Track[]>(initialSnapshot?.queue || []);
+  const [queueName, setQueueName] = useState<string>(
+    initialSnapshot?.queueName || 'Biblioteca'
+  );
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(initialSnapshot?.currentTime || 0);
+  const [duration, setDuration] = useState(
+    initialSnapshot?.duration || initialSnapshot?.track?.duration || 0
+  );
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [activeDeckIndex, setActiveDeckIndex] = useState<0 | 1>(0);
+  const [pendingResumeTime, setPendingResumeTime] = useState<number | null>(
+    initialSnapshot && initialSnapshot.wasPlaying ? initialSnapshot.currentTime : null
+  );
 
   const [crossfadeSeconds, setCrossfadeSeconds] = useState<number>(initialPrefs.crossfadeSeconds);
   const [masterVolume, setMasterVolume] = useState<number>(initialPrefs.masterVolume);
@@ -146,7 +182,6 @@ export function useDualDeckPlayer() {
     durationSec: initialPrefs.crossfadeSeconds,
   });
 
-  // Persist preferences
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -182,17 +217,51 @@ export function useDualDeckPlayer() {
   const loopModeRef = useRef(loopMode);
   const shuffleRef = useRef(shuffle);
   const queueRef = useRef<Track[]>(queue);
+  const queueNameRef = useRef<string>(queueName);
   const currentTrackRef = useRef<Track | null>(currentTrack);
+  const currentTimeRef = useRef<number>(currentTime);
+  const durationRef = useRef<number>(duration);
+  const pendingResumeTimeRef = useRef<number | null>(pendingResumeTime);
   const fadeIntervalRef = useRef<number | null>(null);
   const autoCrossfadedRef = useRef(false);
+  const playSessionIdRef = useRef(0);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
+
+  const ytWaitersRef = useRef<[(() => void) | null, (() => void) | null]>([null, null]);
+  const ytErrorWaitersRef = useRef<[((msg: string) => void) | null, ((msg: string) => void) | null]>([
+    null,
+    null,
+  ]);
 
   masterVolumeRef.current = masterVolume;
   crossfadeSecRef.current = crossfadeSeconds;
   loopModeRef.current = loopMode;
   shuffleRef.current = shuffle;
   queueRef.current = queue;
+  queueNameRef.current = queueName;
   currentTrackRef.current = currentTrack;
+  currentTimeRef.current = currentTime;
+  durationRef.current = duration;
+  pendingResumeTimeRef.current = pendingResumeTime;
+
+  const saveSnapshot = useCallback((forcePlaying?: boolean) => {
+    const track = currentTrackRef.current;
+    if (!track) return;
+    try {
+      const snap: PlaybackSnapshot = {
+        track,
+        queue: queueRef.current,
+        queueName: queueNameRef.current,
+        currentTime: currentTimeRef.current,
+        duration: durationRef.current,
+        wasPlaying: forcePlaying !== undefined ? forcePlaying : isPlayingRef.current,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(PLAYBACK_SNAPSHOT_KEY, JSON.stringify(snap));
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const setDeckVolume = useCallback((deckIdx: 0 | 1, linearVol: number) => {
     const deck = decksRef.current?.[deckIdx];
@@ -203,7 +272,7 @@ export function useDualDeckPlayer() {
       try {
         deck.ytPlayer.setVolume(Math.round(clamped * 100));
       } catch {
-        // ignore if player not ready
+        // ignore
       }
     }
   }, []);
@@ -211,6 +280,13 @@ export function useDualDeckPlayer() {
   const stopDeck = useCallback((deckIdx: 0 | 1) => {
     const deck = decksRef.current?.[deckIdx];
     if (!deck) return;
+    ytWaitersRef.current[deckIdx] = null;
+    ytErrorWaitersRef.current[deckIdx] = null;
+    deck.audio.onplaying = null;
+    deck.audio.onwaiting = null;
+    deck.audio.oncanplay = null;
+    deck.audio.onended = null;
+    deck.audio.onerror = null;
     deck.audio.pause();
     deck.audio.removeAttribute('src');
     deck.audio.load();
@@ -237,7 +313,6 @@ export function useDualDeckPlayer() {
     });
   }, []);
 
-  // Forward ref for ended handler
   const handleTrackEndedRef = useRef<(deckIdx: 0 | 1) => void>(() => {});
 
   const ensureYouTubePlayers = useCallback(async () => {
@@ -282,13 +357,24 @@ export function useDualDeckPlayer() {
               done();
             },
             onStateChange: (event) => {
-              if (activeDeckRef.current !== idx) return;
               const YTState = window.YT?.PlayerState;
               if (!YTState) return;
+
+              if (event.data === YTState.PLAYING) {
+                const waiter = ytWaitersRef.current[idx];
+                if (waiter) {
+                  ytWaitersRef.current[idx] = null;
+                  ytErrorWaitersRef.current[idx] = null;
+                  waiter();
+                }
+              }
+
+              if (activeDeckRef.current !== idx) return;
               if (event.data === YTState.PLAYING) {
                 isPlayingRef.current = true;
                 setIsPlaying(true);
                 setIsBuffering(false);
+                setPendingResumeTime(null);
                 setPlayerError(null);
               } else if (event.data === YTState.PAUSED) {
                 isPlayingRef.current = false;
@@ -301,6 +387,14 @@ export function useDualDeckPlayer() {
               }
             },
             onError: () => {
+              const errWaiter = ytErrorWaitersRef.current[idx];
+              if (errWaiter) {
+                ytWaitersRef.current[idx] = null;
+                ytErrorWaitersRef.current[idx] = null;
+                errWaiter(
+                  'Este vídeo de YouTube bloquea la reproducción externa o no está disponible.'
+                );
+              }
               if (activeDeckRef.current === idx) {
                 setIsBuffering(false);
                 setPlayerError(
@@ -316,19 +410,25 @@ export function useDualDeckPlayer() {
     await Promise.all([createForDeck(0), createForDeck(1)]);
   }, []);
 
-  // Pre-warm YouTube API silently if online
   useEffect(() => {
     if (navigator.onLine) {
       loadYouTubeIframeAPI().catch(() => {});
     }
   }, []);
 
-  const startTrackOnDeck = useCallback(
-    async (deckIdx: 0 | 1, track: Track, initialVolume: number) => {
+  const startAndAwaitDeckLoaded = useCallback(
+    async (
+      deckIdx: 0 | 1,
+      track: Track,
+      initialVolume: number,
+      waitForPlaybackStart: boolean,
+      startSeconds = 0
+    ) => {
       const deck = decksRef.current?.[deckIdx];
       if (!deck) return;
 
-      // Clear previous state on this deck
+      ytWaitersRef.current[deckIdx] = null;
+      ytErrorWaitersRef.current[deckIdx] = null;
       deck.audio.pause();
       if (deck.ytPlayer) {
         try {
@@ -343,15 +443,35 @@ export function useDualDeckPlayer() {
 
       if (track.source === 'youtube' && track.youtubeId) {
         deck.mode = 'youtube';
-        setIsBuffering(true);
         await ensureYouTubePlayers();
         const yt = decksRef.current?.[deckIdx]?.ytPlayer;
         if (!yt) {
           throw new Error('No se pudo inicializar el reproductor de YouTube');
         }
+
+        const waitPromise = waitForPlaybackStart
+          ? new Promise<void>((resolve, reject) => {
+              const timeout = window.setTimeout(() => {
+                ytWaitersRef.current[deckIdx] = null;
+                ytErrorWaitersRef.current[deckIdx] = null;
+                resolve();
+              }, 12000);
+
+              ytWaitersRef.current[deckIdx] = () => {
+                window.clearTimeout(timeout);
+                resolve();
+              };
+              ytErrorWaitersRef.current[deckIdx] = (msg: string) => {
+                window.clearTimeout(timeout);
+                reject(new Error(msg));
+              };
+            })
+          : Promise.resolve();
+
         yt.setVolume(Math.round(Math.max(0, Math.min(1, initialVolume)) * 100));
-        yt.loadVideoById(track.youtubeId, 0);
+        yt.loadVideoById(track.youtubeId, startSeconds);
         yt.playVideo();
+        await waitPromise;
         return;
       }
 
@@ -361,6 +481,58 @@ export function useDualDeckPlayer() {
       audio.volume = Math.max(0, Math.min(1, initialVolume));
       audio.loop = loopModeRef.current === 'track';
 
+      if (startSeconds > 0) {
+        const applySeek = () => {
+          try {
+            audio.currentTime = startSeconds;
+          } catch {
+            // ignore
+          }
+          audio.removeEventListener('loadedmetadata', applySeek);
+        };
+        audio.addEventListener('loadedmetadata', applySeek);
+      }
+
+      const readyPromise = waitForPlaybackStart
+        ? new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const cleanup = () => {
+              audio.removeEventListener('playing', onPlaying);
+              audio.removeEventListener('canplay', onCanPlay);
+              audio.removeEventListener('error', onErr);
+              window.clearTimeout(timeout);
+            };
+            const onPlaying = () => {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              resolve();
+            };
+            const onCanPlay = () => {
+              if (settled || audio.paused) return;
+              settled = true;
+              cleanup();
+              resolve();
+            };
+            const onErr = () => {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              reject(new Error('No se pudo cargar este enlace de audio.'));
+            };
+            const timeout = window.setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              cleanup();
+              resolve();
+            }, 12000);
+
+            audio.addEventListener('playing', onPlaying);
+            audio.addEventListener('canplay', onCanPlay);
+            audio.addEventListener('error', onErr);
+          })
+        : Promise.resolve();
+
       audio.onwaiting = () => {
         if (activeDeckRef.current === deckIdx) setIsBuffering(true);
       };
@@ -369,6 +541,7 @@ export function useDualDeckPlayer() {
           setIsBuffering(false);
           setIsPlaying(true);
           isPlayingRef.current = true;
+          setPendingResumeTime(null);
           setPlayerError(null);
         }
       };
@@ -389,9 +562,8 @@ export function useDualDeckPlayer() {
         }
       };
 
-      setIsBuffering(true);
       await audio.play();
-      setIsBuffering(false);
+      await readyPromise;
     },
     [ensureYouTubePlayers]
   );
@@ -399,7 +571,12 @@ export function useDualDeckPlayer() {
   const playTrack = useCallback(
     async (
       track: Track,
-      options?: { queue?: Track[]; queueName?: string; skipCrossfade?: boolean }
+      options?: {
+        queue?: Track[];
+        queueName?: string;
+        skipCrossfade?: boolean;
+        startSeconds?: number;
+      }
     ) => {
       if (options?.queue) {
         setQueue(options.queue);
@@ -407,8 +584,11 @@ export function useDualDeckPlayer() {
       }
       if (options?.queueName) {
         setQueueName(options.queueName);
+        queueNameRef.current = options.queueName;
       }
 
+      setPendingResumeTime(null);
+      const sessionId = ++playSessionIdRef.current;
       const outgoingIdx = activeDeckRef.current;
       const outgoingDeck = decksRef.current?.[outgoingIdx];
       const shouldCrossfade =
@@ -425,26 +605,57 @@ export function useDualDeckPlayer() {
       if (shouldCrossfade) {
         const incomingIdx: 0 | 1 = outgoingIdx === 0 ? 1 : 0;
         const fromTitle = outgoingDeck.track?.title;
+
+        setCrossfadeStatus({
+          active: true,
+          phase: 'loading',
+          progress: 0,
+          durationSec: crossfadeSecRef.current,
+          fromTitle,
+          toTitle: track.title,
+        });
+
+        try {
+          await startAndAwaitDeckLoaded(
+            incomingIdx,
+            track,
+            0,
+            true,
+            options?.startSeconds || 0
+          );
+        } catch (err) {
+          if (playSessionIdRef.current !== sessionId) return;
+          stopDeck(incomingIdx);
+          cancelCrossfade();
+          setPlayerError(
+            err instanceof Error ? err.message : 'No se pudo cargar la siguiente canción.'
+          );
+          return;
+        }
+
+        if (playSessionIdRef.current !== sessionId) {
+          stopDeck(incomingIdx);
+          return;
+        }
+
         activeDeckRef.current = incomingIdx;
         setActiveDeckIndex(incomingIdx);
         setCurrentTrack(track);
-        setCurrentTime(0);
+        currentTrackRef.current = track;
+        setCurrentTime(options?.startSeconds || 0);
+        currentTimeRef.current = options?.startSeconds || 0;
         setDuration(track.duration || 0);
+        durationRef.current = track.duration || 0;
         setIsPlaying(true);
         isPlayingRef.current = true;
-
-        try {
-          await startTrackOnDeck(incomingIdx, track, 0);
-        } catch {
-          setPlayerError('Error al iniciar la siguiente canción.');
-          setIsBuffering(false);
-          return;
-        }
+        setIsBuffering(false);
+        saveSnapshot(true);
 
         const totalMs = crossfadeSecRef.current * 1000;
         const startTime = performance.now();
         setCrossfadeStatus({
           active: true,
+          phase: 'fading',
           progress: 0,
           durationSec: crossfadeSecRef.current,
           fromTitle,
@@ -452,6 +663,14 @@ export function useDualDeckPlayer() {
         });
 
         fadeIntervalRef.current = window.setInterval(() => {
+          if (playSessionIdRef.current !== sessionId) {
+            if (fadeIntervalRef.current !== null) {
+              window.clearInterval(fadeIntervalRef.current);
+              fadeIntervalRef.current = null;
+            }
+            return;
+          }
+
           const elapsed = performance.now() - startTime;
           const t = Math.min(1, elapsed / totalMs);
           const gainOut = Math.cos(t * Math.PI * 0.5);
@@ -463,6 +682,7 @@ export function useDualDeckPlayer() {
 
           setCrossfadeStatus({
             active: t < 1,
+            phase: 'fading',
             progress: t,
             durationSec: crossfadeSecRef.current,
             fromTitle,
@@ -483,23 +703,73 @@ export function useDualDeckPlayer() {
         activeDeckRef.current = outgoingIdx;
         setActiveDeckIndex(outgoingIdx);
         setCurrentTrack(track);
-        setCurrentTime(0);
+        currentTrackRef.current = track;
+        const startAt = options?.startSeconds || 0;
+        setCurrentTime(startAt);
+        currentTimeRef.current = startAt;
         setDuration(track.duration || 0);
+        durationRef.current = track.duration || 0;
         setIsPlaying(true);
         isPlayingRef.current = true;
+        setIsBuffering(true);
+        saveSnapshot(true);
 
         try {
-          await startTrackOnDeck(outgoingIdx, track, masterVolumeRef.current);
+          await startAndAwaitDeckLoaded(
+            outgoingIdx,
+            track,
+            masterVolumeRef.current,
+            false,
+            startAt
+          );
+          if (playSessionIdRef.current === sessionId) {
+            setIsBuffering(false);
+          }
         } catch {
+          if (playSessionIdRef.current !== sessionId) return;
           setIsPlaying(false);
           isPlayingRef.current = false;
           setIsBuffering(false);
-          setPlayerError('Toca reproducir de nuevo para activar el audio en tu navegador.');
+          if (startAt > 0) {
+            setPendingResumeTime(startAt);
+          } else {
+            setPlayerError('Toca reproducir de nuevo para activar el audio en tu navegador.');
+          }
         }
       }
     },
-    [cancelCrossfade, setDeckVolume, startTrackOnDeck, stopDeck]
+    [cancelCrossfade, saveSnapshot, setDeckVolume, startAndAwaitDeckLoaded, stopDeck]
   );
+
+  // Attempt automatic resume if page was refreshed while music was playing
+  useEffect(() => {
+    if (!initialSnapshot || !initialSnapshot.wasPlaying) return;
+    const ageMs = Date.now() - initialSnapshot.savedAt;
+    // Only auto-resume if refreshed recently (< 30 minutes)
+    if (ageMs > 30 * 60 * 1000) {
+      setPendingResumeTime(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      playTrack(initialSnapshot.track, {
+        queue: initialSnapshot.queue,
+        queueName: initialSnapshot.queueName,
+        skipCrossfade: true,
+        startSeconds: initialSnapshot.currentTime || 0,
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resumePending = useCallback(async () => {
+    if (!currentTrackRef.current) return;
+    const resumeAt = pendingResumeTimeRef.current ?? currentTimeRef.current ?? 0;
+    await playTrack(currentTrackRef.current, {
+      skipCrossfade: true,
+      startSeconds: resumeAt,
+    });
+  }, [playTrack]);
 
   const getNextTrack = useCallback((): Track | null => {
     const q = queueRef.current;
@@ -538,14 +808,15 @@ export function useDualDeckPlayer() {
       stopDeck(1);
       setIsPlaying(false);
       isPlayingRef.current = false;
+      saveSnapshot(false);
       return;
     }
     await playTrack(next);
-  }, [cancelCrossfade, getNextTrack, playTrack, stopDeck]);
+  }, [cancelCrossfade, getNextTrack, playTrack, saveSnapshot, stopDeck]);
 
   const prevTrack = useCallback(async () => {
     const deck = decksRef.current?.[activeDeckRef.current];
-    if (deck) {
+    if (deck && deck.mode !== 'idle') {
       const pos =
         deck.mode === 'youtube'
           ? deck.ytPlayer?.getCurrentTime() || 0
@@ -566,7 +837,6 @@ export function useDualDeckPlayer() {
     }
   }, [getPrevTrack, playTrack]);
 
-  // Wire ended handler
   handleTrackEndedRef.current = (deckIdx: 0 | 1) => {
     if (activeDeckRef.current !== deckIdx) return;
     const deck = decksRef.current?.[deckIdx];
@@ -590,6 +860,13 @@ export function useDualDeckPlayer() {
   const togglePlay = useCallback(async () => {
     const deck = decksRef.current?.[activeDeckRef.current];
     if (!deck || deck.mode === 'idle') {
+      if (currentTrackRef.current) {
+        await playTrack(currentTrackRef.current, {
+          skipCrossfade: true,
+          startSeconds: pendingResumeTimeRef.current ?? currentTimeRef.current ?? 0,
+        });
+        return;
+      }
       if (queueRef.current.length > 0) {
         await playTrack(queueRef.current[0], { skipCrossfade: true });
       }
@@ -604,6 +881,7 @@ export function useDualDeckPlayer() {
       }
       isPlayingRef.current = false;
       setIsPlaying(false);
+      saveSnapshot(false);
     } else {
       try {
         if (deck.mode === 'youtube' && deck.ytPlayer) {
@@ -613,24 +891,39 @@ export function useDualDeckPlayer() {
         }
         isPlayingRef.current = true;
         setIsPlaying(true);
+        setPendingResumeTime(null);
+        saveSnapshot(true);
       } catch {
         setPlayerError('No se pudo reanudar la reproducción.');
       }
     }
-  }, [playTrack]);
+  }, [playTrack, saveSnapshot]);
 
-  const seekTo = useCallback((seconds: number) => {
-    const deck = decksRef.current?.[activeDeckRef.current];
-    if (!deck || deck.mode === 'idle') return;
-    const clamped = Math.max(0, seconds);
-    if (deck.mode === 'youtube' && deck.ytPlayer) {
-      deck.ytPlayer.seekTo(clamped, true);
-    } else {
-      deck.audio.currentTime = clamped;
-    }
-    setCurrentTime(clamped);
-    autoCrossfadedRef.current = false;
-  }, []);
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const deck = decksRef.current?.[activeDeckRef.current];
+      const clamped = Math.max(0, seconds);
+      if (!deck || deck.mode === 'idle') {
+        setCurrentTime(clamped);
+        currentTimeRef.current = clamped;
+        if (pendingResumeTimeRef.current !== null) {
+          setPendingResumeTime(clamped);
+        }
+        saveSnapshot();
+        return;
+      }
+      if (deck.mode === 'youtube' && deck.ytPlayer) {
+        deck.ytPlayer.seekTo(clamped, true);
+      } else {
+        deck.audio.currentTime = clamped;
+      }
+      setCurrentTime(clamped);
+      currentTimeRef.current = clamped;
+      autoCrossfadedRef.current = false;
+      saveSnapshot();
+    },
+    [saveSnapshot]
+  );
 
   const skipBy = useCallback(
     (deltaSeconds: number) => {
@@ -644,20 +937,21 @@ export function useDualDeckPlayer() {
         deck.mode === 'youtube'
           ? deck.ytPlayer?.getDuration() || currentTrackRef.current?.duration || 0
           : deck.audio.duration || currentTrackRef.current?.duration || 0;
-      const target = dur > 0 ? Math.min(dur - 0.5, Math.max(0, pos + deltaSeconds)) : Math.max(0, pos + deltaSeconds);
+      const target =
+        dur > 0
+          ? Math.min(dur - 0.5, Math.max(0, pos + deltaSeconds))
+          : Math.max(0, pos + deltaSeconds);
       seekTo(target);
     },
     [seekTo]
   );
 
-  // Sync master volume immediately when slider changes (outside active fade)
   useEffect(() => {
     if (fadeIntervalRef.current === null) {
       setDeckVolume(activeDeckRef.current, masterVolume);
     }
   }, [masterVolume, setDeckVolume]);
 
-  // Sync loopMode for HTML5 audio
   useEffect(() => {
     const deck = decksRef.current?.[activeDeckRef.current];
     if (deck && deck.mode === 'audio') {
@@ -665,8 +959,9 @@ export function useDualDeckPlayer() {
     }
   }, [loopMode]);
 
-  // Poll progress & trigger auto-crossfade near track end
+  // Poll progress, save snapshot periodically, and trigger auto-crossfade
   useEffect(() => {
+    let tickCount = 0;
     const timer = window.setInterval(() => {
       const deck = decksRef.current?.[activeDeckRef.current];
       if (!deck || deck.mode === 'idle') return;
@@ -688,15 +983,25 @@ export function useDualDeckPlayer() {
       }
 
       setCurrentTime(pos);
-      if (dur > 0) setDuration(dur);
+      currentTimeRef.current = pos;
+      if (dur > 0) {
+        setDuration(dur);
+        durationRef.current = dur;
+      }
+
+      tickCount += 1;
+      if (tickCount % 4 === 0 && isPlayingRef.current) {
+        saveSnapshot(true);
+      }
 
       const cf = crossfadeSecRef.current;
+      const triggerLead = cf + 1.5;
       if (
         isPlayingRef.current &&
         cf > 0 &&
-        dur > cf + 3 &&
+        dur > triggerLead + 3 &&
         pos > 2 &&
-        dur - pos <= cf &&
+        dur - pos <= triggerLead &&
         loopModeRef.current !== 'track' &&
         !autoCrossfadedRef.current
       ) {
@@ -709,9 +1014,17 @@ export function useDualDeckPlayer() {
     }, 250);
 
     return () => window.clearInterval(timer);
-  }, [getNextTrack, nextTrack]);
+  }, [getNextTrack, nextTrack, saveSnapshot]);
 
-  // Android Media Session API integration
+  // Flush snapshot right before page unloads/reloads
+  useEffect(() => {
+    const onPageHide = () => {
+      saveSnapshot();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [saveSnapshot]);
+
   useEffect(() => {
     if (!('mediaSession' in navigator) || !currentTrack) return;
     try {
@@ -737,11 +1050,10 @@ export function useDualDeckPlayer() {
         }
       });
     } catch {
-      // Ignore unsupported MediaSession handlers
+      // Ignore
     }
   }, [currentTrack, isPlaying, queueName, togglePlay, prevTrack, nextTrack, skipBy, seekTo]);
 
-  // Wake lock for Android tabletop sessions
   useEffect(() => {
     let cancelled = false;
 
@@ -759,7 +1071,7 @@ export function useDualDeckPlayer() {
           wl.release().catch(() => {});
         }
       } catch {
-        // WakeLock not supported or denied
+        // ignore
       }
     };
 
@@ -787,7 +1099,6 @@ export function useDualDeckPlayer() {
     };
   }, [keepScreenAwake]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       cancelCrossfade();
@@ -806,6 +1117,9 @@ export function useDualDeckPlayer() {
     duration,
     playerError,
     activeDeckIndex,
+    pendingResumeTime,
+    resumePending,
+    dismissPendingResume: () => setPendingResumeTime(null),
     crossfadeSeconds,
     setCrossfadeSeconds,
     crossfadeStatus,

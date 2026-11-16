@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Check, FolderPlus, X } from 'lucide-react';
 import { Folder, FolderIconName, Track } from '../types/audio';
-import { FolderIcon } from './FolderIcon';
+import { FOLDER_ICON_OPTIONS, FolderIcon } from './FolderIcon';
 
 interface FolderPickerModalProps {
   track: Track | null;
@@ -23,6 +23,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
   onCreateFolder,
 }) => {
   const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderIcon, setNewFolderIcon] = useState<FolderIconName>('music');
   const [creating, setCreating] = useState(false);
 
   if (!track) return null;
@@ -30,10 +31,11 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
-    const created = onCreateFolder(newFolderName.trim(), 'music');
+    const created = onCreateFolder(newFolderName.trim(), newFolderIcon);
     if (created) {
       onAddTrackToFolder(track, created.id);
       setNewFolderName('');
+      setNewFolderIcon('music');
       setCreating(false);
     }
   };
@@ -51,7 +53,9 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
 
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs text-[#9C988E]">Guardar en carpeta</p>
+            <p className="text-xs text-[#9C988E]">
+              Carpetas de la canción · puedes marcar varias a la vez ({containingFolderIds.length})
+            </p>
             <h3 className="font-display text-lg font-semibold text-[#F2F0EB] truncate">
               {track.title}
             </h3>
@@ -112,21 +116,40 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
         </div>
 
         {creating ? (
-          <form onSubmit={handleCreate} className="mt-3 flex items-center gap-2">
-            <input
-              type="text"
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder="Nombre de la nueva carpeta"
-              autoFocus
-              className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
-            />
-            <button
-              type="submit"
-              className="min-h-[44px] px-4 rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] shrink-0"
-            >
-              Crear
-            </button>
+          <form onSubmit={handleCreate} className="mt-3 space-y-2.5 pt-2 border-t border-white/8">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                placeholder="Nombre de la nueva carpeta"
+                autoFocus
+                className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
+              />
+              <button
+                type="submit"
+                className="min-h-[44px] px-4 rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] shrink-0"
+              >
+                Crear
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {FOLDER_ICON_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setNewFolderIcon(opt.value)}
+                  title={opt.label}
+                  className={`min-w-[40px] min-h-[40px] rounded-lg border flex items-center justify-center shrink-0 transition ${
+                    newFolderIcon === opt.value
+                      ? 'border-[#D99B38] bg-[#D99B38]/20 text-[#F2BE63]'
+                      : 'border-white/8 bg-[#0D0E11] text-[#9C988E]'
+                  }`}
+                >
+                  <FolderIcon name={opt.value} className="w-4 h-4" />
+                </button>
+              ))}
+            </div>
           </form>
         ) : (
           <button

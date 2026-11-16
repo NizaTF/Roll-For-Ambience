@@ -159,18 +159,26 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
         <div className="rounded-xl border border-[#D99B38]/40 bg-[#D99B38]/10 px-3 py-2 space-y-1.5">
           <div className="flex items-center justify-between text-xs text-[#F2BE63]">
             <span className="truncate">
-              Fundido hacia {crossfadeStatus.toTitle || 'siguiente pista'}
+              {crossfadeStatus.phase === 'loading'
+                ? `Cargando "${crossfadeStatus.toTitle || 'siguiente'}" para fundir...`
+                : `Fundido hacia ${crossfadeStatus.toTitle || 'siguiente pista'}`}
             </span>
-            <span className="font-mono-tabular shrink-0 ml-2">
-              {Math.round(crossfadeStatus.progress * 100)}%
+            <span className="font-mono-tabular shrink-0 ml-2 flex items-center gap-1.5">
+              {crossfadeStatus.phase === 'loading' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                `${Math.round(crossfadeStatus.progress * 100)}%`
+              )}
             </span>
           </div>
-          <div className="h-1 rounded-full bg-white/10 overflow-hidden">
-            <div
-              className="h-full bg-[#F2BE63] transition-all duration-75"
-              style={{ width: `${Math.round(crossfadeStatus.progress * 100)}%` }}
-            />
-          </div>
+          {crossfadeStatus.phase !== 'loading' && (
+            <div className="h-1 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full bg-[#F2BE63] transition-all duration-75"
+                style={{ width: `${Math.round(crossfadeStatus.progress * 100)}%` }}
+              />
+            </div>
+          )}
         </div>
       )}
 

@@ -12,10 +12,11 @@
     background-color: #0D0E11;
     color: #F2F0EB;
     -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
   }
 
   body {
-    overscroll-behavior-y: contain;
+    overscroll-behavior-y: none;
     min-height: 100dvh;
   }
 }

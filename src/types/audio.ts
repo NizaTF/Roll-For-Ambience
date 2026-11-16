@@ -3,11 +3,30 @@ export type AudioSourceType = 'audius' | 'youtube' | 'direct';
 export type FolderIconName =
   | 'beer'
   | 'sword'
+  | 'shield'
   | 'skull'
+  | 'ghost'
   | 'compass'
+  | 'map'
+  | 'trees'
+  | 'mountain'
+  | 'waves'
+  | 'cloudRain'
   | 'flame'
+  | 'snowflake'
+  | 'wand'
+  | 'zap'
   | 'crown'
+  | 'castle'
+  | 'church'
+  | 'gem'
+  | 'coins'
+  | 'anchor'
+  | 'tent'
   | 'moon'
+  | 'sun'
+  | 'scroll'
+  | 'eye'
   | 'music';
 
 export interface Track {
@@ -47,6 +66,7 @@ export type LoopMode = 'none' | 'folder' | 'track';
 
 export interface CrossfadeStatus {
   active: boolean;
+  phase?: 'loading' | 'fading';
   progress: number;
   durationSec: number;
   fromTitle?: string;

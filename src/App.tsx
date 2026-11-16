@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { FolderOpen, Search, Volume2, WifiOff, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FolderOpen, Play, Search, Volume2, WifiOff, X } from 'lucide-react';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { LibraryView } from './components/LibraryView';
 import { MiniPlayer } from './components/MiniPlayer';
@@ -11,12 +11,24 @@ import { useDualDeckPlayer } from './hooks/useDualDeckPlayer';
 import { useLibraryStore } from './hooks/useLibraryStore';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSoundboard } from './hooks/useSoundboard';
+import { formatDuration } from './services/freeMusicApi';
 import { LoopMode, Track } from './types/audio';
 
 type MainTab = 'library' | 'search' | 'soundboard';
+const ACTIVE_TAB_KEY = 'rfa_dnd_active_tab_v1';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<MainTab>('library');
+  const [activeTab, setActiveTab] = useState<MainTab>(() => {
+    try {
+      const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+      if (saved === 'library' || saved === 'search' || saved === 'soundboard') {
+        return saved;
+      }
+    } catch {
+      // ignore
+    }
+    return 'library';
+  });
   const [playerSheetOpen, setPlayerSheetOpen] = useState(false);
   const [showYoutubeFrame, setShowYoutubeFrame] = useState(false);
   const [pickerTrack, setPickerTrack] = useState<Track | null>(null);
@@ -25,6 +37,28 @@ export default function App() {
   const library = useLibraryStore();
   const player = useDualDeckPlayer();
   const soundboard = useSoundboard();
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+    } catch {
+      // ignore
+    }
+  }, [activeTab]);
+
+  // Prevent accidental page refresh / tab close while music or soundboard audio is active
+  useEffect(() => {
+    const hasActiveAudio = player.isPlaying || soundboard.activeCount > 0;
+    if (!hasActiveAudio) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [player.isPlaying, soundboard.activeCount]);
 
   const currentFolderTracks = library.getFolderTracks(library.selectedFolderId);
 
@@ -107,6 +141,37 @@ export default function App() {
         </div>
       )}
 
+      {/* Resume session banner if browser blocked autoplay right after a reload */}
+      {player.pendingResumeTime !== null && player.currentTrack && !player.isPlaying && (
+        <div className="bg-[#D99B38]/15 border-b border-[#D99B38]/35 px-4 py-2.5">
+          <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={player.resumePending}
+              className="flex-1 min-w-0 flex items-center gap-2.5 text-left min-h-[40px]"
+            >
+              <span className="w-8 h-8 rounded-lg bg-[#D99B38] text-[#0D0E11] flex items-center justify-center shrink-0">
+                <Play className="w-4 h-4 fill-current ml-0.5" />
+              </span>
+              <span className="text-xs text-[#F2F0EB] truncate">
+                Continuar <strong>{player.currentTrack.title}</strong> en{' '}
+                <span className="font-mono-tabular text-[#F2BE63]">
+                  {formatDuration(player.pendingResumeTime)}
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={player.dismissPendingResume}
+              aria-label="Cerrar aviso"
+              className="min-w-[36px] min-h-[36px] flex items-center justify-center text-[#9C988E] hover:text-[#F2F0EB] shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 pt-4 pb-36 lg:pb-10">
         <div className="lg:grid lg:grid-cols-12 lg:gap-8 items-start">
@@ -121,16 +186,18 @@ export default function App() {
                 tracks={currentFolderTracks}
                 currentTrack={player.currentTrack}
                 isPlaying={player.isPlaying}
+                getFoldersContainingTrack={library.getFoldersContainingTrack}
                 onPlayTrack={handlePlayTrack}
                 onTogglePlay={player.togglePlay}
                 onCreateFolder={library.createFolder}
-                onRenameFolder={library.renameFolder}
+                onUpdateFolder={library.updateFolder}
                 onDeleteFolder={library.deleteFolder}
                 onOpenFolderPicker={(t) => setPickerTrack(t)}
                 onRemoveTrackFromFolder={library.removeTrackFromFolder}
                 onMoveTrack={library.moveTrackInFolder}
+                onExportPlaylist={library.exportPlaylist}
                 onExportBackup={library.exportBackup}
-                onImportBackup={library.importBackup}
+                onImportListOrBackup={library.importListOrBackup}
                 onResetStarter={library.resetToStarter}
                 onGoToSearch={() => setActiveTab('search')}
               />

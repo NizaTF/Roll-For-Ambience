@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Download,
+  FolderCheck,
   FolderPlus,
   MoreVertical,
   Music2,
@@ -11,6 +12,7 @@ import {
   Play,
   RotateCcw,
   Search,
+  Share2,
   Trash2,
   Upload,
   X,
@@ -27,16 +29,21 @@ interface LibraryViewProps {
   tracks: Track[];
   currentTrack: Track | null;
   isPlaying: boolean;
+  getFoldersContainingTrack: (trackId: string) => string[];
   onPlayTrack: (track: Track, queue: Track[], queueName: string) => void;
   onTogglePlay: () => void;
   onCreateFolder: (name: string, icon: FolderIconName) => void;
-  onRenameFolder: (folderId: string, name: string) => void;
+  onUpdateFolder: (
+    folderId: string,
+    updates: { name?: string; icon?: FolderIconName }
+  ) => void;
   onDeleteFolder: (folderId: string) => void;
   onOpenFolderPicker: (track: Track) => void;
   onRemoveTrackFromFolder: (trackId: string, folderId: string) => void;
   onMoveTrack: (folderId: string, trackId: string, dir: 'up' | 'down') => void;
+  onExportPlaylist: (folderId: string) => string;
   onExportBackup: () => string;
-  onImportBackup: (json: string) => boolean;
+  onImportListOrBackup: (json: string) => { ok: boolean; message: string };
   onResetStarter: () => void;
   onGoToSearch: () => void;
 }
@@ -61,28 +68,38 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   tracks,
   currentTrack,
   isPlaying,
+  getFoldersContainingTrack,
   onPlayTrack,
   onTogglePlay,
   onCreateFolder,
-  onRenameFolder,
+  onUpdateFolder,
   onDeleteFolder,
   onOpenFolderPicker,
   onRemoveTrackFromFolder,
   onMoveTrack,
+  onExportPlaylist,
   onExportBackup,
-  onImportBackup,
+  onImportListOrBackup,
   onResetStarter,
   onGoToSearch,
 }) => {
   const [filterText, setFilterText] = useState('');
+
+  // Create folder modal
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [newName, setNewName] = useState('');
   const [newIcon, setNewIcon] = useState<FolderIconName>('sword');
 
+  // Edit active folder modal (name + icon)
+  const [showEditFolderModal, setShowEditFolderModal] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editIcon, setEditIcon] = useState<FolderIconName>('music');
+
+  // Options / Import-Export modal
   const [showFolderOptions, setShowFolderOptions] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [renameText, setRenameText] = useState('');
-  const [backupNotice, setBackupNotice] = useState<string | null>(null);
+  const [backupNotice, setBackupNotice] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const filteredTracks = useMemo(() => {
@@ -97,6 +114,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
   const queueTitle = activeFolder ? activeFolder.name : 'Todas las canciones';
 
+  const showNotice = (ok: boolean, text: string) => {
+    setBackupNotice({ ok, text });
+    window.setTimeout(() => setBackupNotice(null), 3200);
+  };
+
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) return;
@@ -106,17 +128,44 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setShowNewFolderModal(false);
   };
 
-  const handleDownloadBackup = () => {
-    const json = onExportBackup();
+  const openEditFolder = () => {
+    if (!activeFolder) return;
+    setEditName(activeFolder.name);
+    setEditIcon(activeFolder.icon);
+    setShowEditFolderModal(true);
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeFolder || !editName.trim()) return;
+    onUpdateFolder(activeFolder.id, { name: editName.trim(), icon: editIcon });
+    setShowEditFolderModal(false);
+  };
+
+  const triggerDownload = (json: string, filename: string) => {
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `rfa-carpetas-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-    setBackupNotice('Copia de seguridad descargada');
-    setTimeout(() => setBackupNotice(null), 2500);
+  };
+
+  const handleDownloadPlaylist = () => {
+    const json = onExportPlaylist(selectedFolderId);
+    const slug = queueTitle
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-|-$/g, '');
+    triggerDownload(json, `rfa-lista-${slug || 'escena'}.json`);
+    showNotice(true, `Lista "${queueTitle}" exportada`);
+  };
+
+  const handleDownloadBackup = () => {
+    const json = onExportBackup();
+    triggerDownload(json, `rfa-biblioteca-${new Date().toISOString().slice(0, 10)}.json`);
+    showNotice(true, 'Biblioteca completa exportada');
   };
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,9 +173,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const ok = onImportBackup(String(reader.result || ''));
-      setBackupNotice(ok ? 'Biblioteca restaurada' : 'Archivo no válido');
-      setTimeout(() => setBackupNotice(null), 2500);
+      const res = onImportListOrBackup(String(reader.result || ''));
+      showNotice(res.ok, res.message);
+      if (res.ok) {
+        setShowFolderOptions(false);
+      }
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -185,18 +236,25 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </button>
       </div>
 
-      {/* Folder title & quick play bar */}
-      <div className="flex items-center justify-between gap-3 pt-1">
-        <div className="min-w-0">
-          <h2 className="font-display text-xl sm:text-2xl font-semibold text-[#F2F0EB] truncate">
-            {queueTitle}
-          </h2>
-          <p className="text-xs text-[#9C988E] mt-0.5 tabular-nums">
-            {tracks.length} {tracks.length === 1 ? 'pista' : 'pistas'}
-          </p>
+      {/* Folder title & quick actions bar */}
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <div className="min-w-0 flex items-center gap-2.5">
+          {activeFolder && (
+            <span className="w-10 h-10 rounded-xl bg-[#16181D] border border-white/10 text-[#F2BE63] flex items-center justify-center shrink-0">
+              <FolderIcon name={activeFolder.icon} className="w-5 h-5" />
+            </span>
+          )}
+          <div className="min-w-0">
+            <h2 className="font-display text-xl sm:text-2xl font-semibold text-[#F2F0EB] truncate">
+              {queueTitle}
+            </h2>
+            <p className="text-xs text-[#9C988E] mt-0.5 tabular-nums">
+              {tracks.length} {tracks.length === 1 ? 'pista' : 'pistas'}
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           {tracks.length > 0 && (
             <button
               type="button"
@@ -207,20 +265,42 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <span>Reproducir</span>
             </button>
           )}
+
+          {activeFolder && (
+            <button
+              type="button"
+              onClick={openEditFolder}
+              aria-label="Personalizar icono y nombre de carpeta"
+              title="Personalizar carpeta"
+              className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-[#16181D] text-[#C7C2B6] hover:text-[#F2BE63] hover:bg-[#1E2128] flex items-center justify-center transition"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          )}
+
           <button
             type="button"
-            onClick={() => {
-              setShowFolderOptions(true);
-              setRenaming(false);
-              setRenameText(activeFolder?.name || '');
-            }}
-            aria-label="Opciones de carpeta y copia de seguridad"
-            className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-[#16181D] text-[#C7C2B6] hover:bg-[#1E2128] flex items-center justify-center transition"
+            onClick={() => setShowFolderOptions(true)}
+            aria-label="Exportar, importar listas y opciones"
+            title="Exportar / Importar listas y opciones"
+            className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-[#16181D] text-[#C7C2B6] hover:text-[#F2F0EB] hover:bg-[#1E2128] flex items-center justify-center transition"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
         </div>
       </div>
+
+      {backupNotice && (
+        <div
+          className={`rounded-xl border px-3.5 py-2.5 text-xs ${
+            backupNotice.ok
+              ? 'border-[#D99B38]/40 bg-[#D99B38]/12 text-[#F2BE63]'
+              : 'border-rose-500/40 bg-rose-500/12 text-rose-200'
+          }`}
+        >
+          {backupNotice.text}
+        </div>
+      )}
 
       {/* Inline filter inside folder */}
       {tracks.length > 3 && (
@@ -251,7 +331,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="rounded-2xl border border-white/8 bg-[#16181D] p-6 text-center space-y-3">
           <p className="text-sm text-[#C7C2B6]">
             {tracks.length === 0
-              ? 'Esta carpeta está vacía. Añade pistas desde el buscador o pega un enlace de YouTube.'
+              ? 'Esta carpeta está vacía. Añade pistas desde el buscador, pega un enlace de YouTube o importa una lista.'
               : 'Ninguna canción coincide con tu filtro.'}
           </p>
           {tracks.length === 0 && (
@@ -268,10 +348,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="rounded-2xl border border-white/8 bg-[#16181D] divide-y divide-white/6 overflow-hidden">
           {filteredTracks.map((track, idx) => {
             const isCurrent = currentTrack?.id === track.id;
+            const folderCount = getFoldersContainingTrack(track.id).length;
+
             return (
               <div
                 key={track.id}
-                className={`flex items-center gap-3 px-3 py-2.5 min-h-[64px] transition ${
+                className={`flex items-center gap-2 px-3 py-2.5 min-h-[64px] transition ${
                   isCurrent ? 'bg-[#D99B38]/10' : 'hover:bg-white/[0.03]'
                 }`}
               >
@@ -330,7 +412,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           type="button"
                           onClick={() => onMoveTrack(activeFolder.id, track.id, 'up')}
                           aria-label="Subir"
-                          className="hidden sm:flex min-w-[38px] min-h-[44px] items-center justify-center text-[#8C887E] hover:text-[#F2F0EB]"
+                          className="hidden sm:flex min-w-[36px] min-h-[44px] items-center justify-center text-[#8C887E] hover:text-[#F2F0EB]"
                         >
                           <ArrowUp className="w-4 h-4" />
                         </button>
@@ -340,7 +422,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           type="button"
                           onClick={() => onMoveTrack(activeFolder.id, track.id, 'down')}
                           aria-label="Bajar"
-                          className="hidden sm:flex min-w-[38px] min-h-[44px] items-center justify-center text-[#8C887E] hover:text-[#F2F0EB]"
+                          className="hidden sm:flex min-w-[36px] min-h-[44px] items-center justify-center text-[#8C887E] hover:text-[#F2F0EB]"
                         >
                           <ArrowDown className="w-4 h-4" />
                         </button>
@@ -351,10 +433,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenFolderPicker(track)}
-                    aria-label="Guardar en carpetas"
-                    className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-[#9C988E] hover:text-[#F2BE63] hover:bg-white/5"
+                    aria-label="Modificar carpetas de esta canción"
+                    title="Modificar carpetas (múltiples carpetas)"
+                    className={`min-w-[44px] min-h-[44px] px-2 flex items-center justify-center gap-1 rounded-xl transition ${
+                      folderCount > 1
+                        ? 'text-[#F2BE63] bg-[#D99B38]/12 hover:bg-[#D99B38]/20'
+                        : 'text-[#9C988E] hover:text-[#F2BE63] hover:bg-white/5'
+                    }`}
                   >
-                    <FolderPlus className="w-4 h-4" />
+                    <FolderCheck className="w-4 h-4" />
+                    {folderCount > 0 && (
+                      <span className="text-[11px] font-mono-tabular">{folderCount}</span>
+                    )}
                   </button>
 
                   <button
@@ -366,7 +456,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       )
                     }
                     aria-label={
-                      activeFolder ? 'Quitar de esta carpeta' : 'Eliminar canción'
+                      activeFolder
+                        ? `Quitar de ${activeFolder.name}`
+                        : 'Eliminar canción de la biblioteca'
+                    }
+                    title={
+                      activeFolder
+                        ? `Quitar de ${activeFolder.name}`
+                        : 'Eliminar de toda la biblioteca'
                     }
                     className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-[#9C988E] hover:text-rose-400 hover:bg-white/5"
                   >
@@ -388,9 +485,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <form
             onSubmit={handleCreateSubmit}
             onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe space-y-4 shadow-2xl"
+            className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe space-y-4 shadow-2xl max-h-[88dvh] flex flex-col"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between shrink-0">
               <h3 className="font-display text-lg font-semibold text-[#F2F0EB]">
                 Nueva carpeta
               </h3>
@@ -404,7 +501,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </button>
             </div>
 
-            <div>
+            <div className="shrink-0">
               <label className="block text-xs text-[#9C988E] mb-1.5">
                 Nombre de la escena o carpeta
               </label>
@@ -418,22 +515,24 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               />
             </div>
 
-            <div>
-              <span className="block text-xs text-[#9C988E] mb-2">Icono</span>
-              <div className="grid grid-cols-4 gap-2">
+            <div className="min-h-0 flex-1 flex flex-col">
+              <span className="block text-xs text-[#9C988E] mb-2 shrink-0">
+                Elige un icono ({FOLDER_ICON_OPTIONS.length} disponibles)
+              </span>
+              <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 overflow-y-auto pr-1">
                 {FOLDER_ICON_OPTIONS.map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
                     onClick={() => setNewIcon(opt.value)}
-                    className={`min-h-[44px] px-2 py-2 rounded-xl border text-xs flex flex-col items-center justify-center gap-1 transition ${
+                    className={`min-h-[54px] px-1.5 py-2 rounded-xl border text-xs flex flex-col items-center justify-center gap-1 transition ${
                       newIcon === opt.value
                         ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-                        : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6]'
+                        : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
                     }`}
                   >
                     <FolderIcon name={opt.value} className="w-4 h-4" />
-                    <span className="text-[11px]">{opt.label}</span>
+                    <span className="text-[10px] truncate max-w-full">{opt.label}</span>
                   </button>
                 ))}
               </div>
@@ -441,7 +540,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
             <button
               type="submit"
-              className="w-full min-h-[48px] rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] transition"
+              className="w-full min-h-[48px] rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] transition shrink-0"
             >
               Crear carpeta
             </button>
@@ -449,7 +548,78 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       )}
 
-      {/* Folder Options & Backup Modal */}
+      {/* Edit Folder Modal (Name + Icon) */}
+      {showEditFolderModal && activeFolder && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setShowEditFolderModal(false)}
+        >
+          <form
+            onSubmit={handleEditSubmit}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe space-y-4 shadow-2xl max-h-[88dvh] flex flex-col"
+          >
+            <div className="flex items-center justify-between shrink-0">
+              <h3 className="font-display text-lg font-semibold text-[#F2F0EB]">
+                Personalizar carpeta
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowEditFolderModal(false)}
+                aria-label="Cerrar"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center text-[#9C988E]"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="shrink-0">
+              <label className="block text-xs text-[#9C988E] mb-1.5">
+                Nombre de la carpeta
+              </label>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                autoFocus
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] focus:outline-none focus:border-[#D99B38]"
+              />
+            </div>
+
+            <div className="min-h-0 flex-1 flex flex-col">
+              <span className="block text-xs text-[#9C988E] mb-2 shrink-0">
+                Icono de la carpeta
+              </span>
+              <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 overflow-y-auto pr-1">
+                {FOLDER_ICON_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setEditIcon(opt.value)}
+                    className={`min-h-[54px] px-1.5 py-2 rounded-xl border text-xs flex flex-col items-center justify-center gap-1 transition ${
+                      editIcon === opt.value
+                        ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
+                        : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
+                    }`}
+                  >
+                    <FolderIcon name={opt.value} className="w-4 h-4" />
+                    <span className="text-[10px] truncate max-w-full">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full min-h-[48px] rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] transition shrink-0"
+            >
+              Guardar cambios
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Lists Export/Import & Folder Options Modal */}
       {showFolderOptions && (
         <div
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm"
@@ -461,7 +631,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           >
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-semibold text-[#F2F0EB]">
-                Opciones de biblioteca
+                Listas y opciones
               </h3>
               <button
                 type="button"
@@ -475,39 +645,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
             {activeFolder && (
               <div className="space-y-2 pb-2 border-b border-white/8">
-                {renaming ? (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={renameText}
-                      onChange={(e) => setRenameText(e.target.value)}
-                      className="flex-1 min-h-[44px] px-3 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB]"
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onRenameFolder(activeFolder.id, renameText);
-                        setRenaming(false);
-                      }}
-                      className="min-h-[44px] px-4 rounded-xl bg-[#D99B38] text-[#0D0E11] text-xs font-semibold"
-                    >
-                      Guardar
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRenameText(activeFolder.name);
-                      setRenaming(true);
-                    }}
-                    className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
-                  >
-                    <Pencil className="w-4 h-4 text-[#D99B38]" />
-                    <span>Renombrar "{activeFolder.name}"</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFolderOptions(false);
+                    openEditFolder();
+                  }}
+                  className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+                >
+                  <Pencil className="w-4 h-4 text-[#D99B38]" />
+                  <span>Personalizar icono y nombre</span>
+                </button>
 
                 <button
                   type="button"
@@ -518,51 +666,62 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-rose-400 flex items-center gap-3 hover:bg-rose-500/10"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span>Eliminar carpeta</span>
+                  <span>Eliminar "{activeFolder.name}"</span>
                 </button>
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={handleDownloadBackup}
-              className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
-            >
-              <Download className="w-4 h-4 text-[#D99B38]" />
-              <span>Exportar copia de seguridad (JSON)</span>
-            </button>
+            <div className="space-y-2">
+              <p className="text-xs text-[#9C988E]">Exportar e importar listas (.json)</p>
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
-            >
-              <Upload className="w-4 h-4 text-[#D99B38]" />
-              <span>Importar copia de seguridad</span>
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json"
-              onChange={handleFileImport}
-              className="hidden"
-            />
+              <button
+                type="button"
+                onClick={handleDownloadPlaylist}
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+              >
+                <Share2 className="w-4 h-4 text-[#D99B38]" />
+                <span>Exportar lista "{queueTitle}"</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                onResetStarter();
-                setShowFolderOptions(false);
-              }}
-              className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#C7C2B6] flex items-center gap-3 hover:bg-[#262A33]"
-            >
-              <RotateCcw className="w-4 h-4 text-[#9C988E]" />
-              <span>Restaurar carpetas iniciales</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+              >
+                <Upload className="w-4 h-4 text-[#D99B38]" />
+                <span>Importar lista o copia de seguridad</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={handleFileImport}
+                className="hidden"
+              />
 
-            {backupNotice && (
-              <p className="text-xs text-[#F2BE63] text-center pt-1">{backupNotice}</p>
-            )}
+              <button
+                type="button"
+                onClick={handleDownloadBackup}
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+              >
+                <Download className="w-4 h-4 text-[#D99B38]" />
+                <span>Exportar todas las listas (copia completa)</span>
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-white/8">
+              <button
+                type="button"
+                onClick={() => {
+                  onResetStarter();
+                  setShowFolderOptions(false);
+                }}
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#C7C2B6] flex items-center gap-3 hover:bg-[#262A33]"
+              >
+                <RotateCcw className="w-4 h-4 text-[#9C988E]" />
+                <span>Restaurar carpetas iniciales</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
