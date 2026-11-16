@@ -1,0 +1,6 @@
+{
+  "name": "Bardo — Música D&D",
+  "description": "Reproductor de música gratuito con fundido cruzado, carpetas de campaña, buscador de audio libre y soundboard táctil para sesiones rápidas de D&D en Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
