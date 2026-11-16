@@ -183,6 +183,7 @@ export async function cacheTrackIntro(
     try {
       const res = await fetch(track.url, {
         method: 'GET',
+        cache: 'no-store',
         headers: {
           Range: `bytes=0-${targetBytes - 1}`,
         },

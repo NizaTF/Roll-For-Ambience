@@ -260,6 +260,10 @@ export default function App() {
                 onChangeCrossfade={player.setCrossfadeSeconds}
                 introCacheSeconds={player.introCacheSeconds}
                 onChangeIntroCache={player.setIntroCacheSeconds}
+                audioFilter={player.audioFilter}
+                onChangeAudioFilter={player.setAudioFilter}
+                activeDeckMode={player.activeDeckMode}
+                filterStatusNote={player.filterStatusNote}
                 crossfadeStatus={player.crossfadeStatus}
                 masterVolume={player.masterVolume}
                 onChangeVolume={player.setMasterVolume}
@@ -363,6 +367,10 @@ export default function App() {
               onChangeCrossfade={player.setCrossfadeSeconds}
               introCacheSeconds={player.introCacheSeconds}
               onChangeIntroCache={player.setIntroCacheSeconds}
+              audioFilter={player.audioFilter}
+              onChangeAudioFilter={player.setAudioFilter}
+              activeDeckMode={player.activeDeckMode}
+              filterStatusNote={player.filterStatusNote}
               crossfadeStatus={player.crossfadeStatus}
               masterVolume={player.masterVolume}
               onChangeVolume={player.setMasterVolume}
@@ -425,11 +433,35 @@ export default function App() {
             </button>
           </div>
         )}
+        {showYtOverlay && player.activeDeckMode !== 'youtube' && (
+          <div className="mb-2 rounded-xl border border-[#D99B38]/35 bg-[#D99B38]/10 px-3 py-2 text-xs text-[#F2BE63] flex items-center justify-between gap-2">
+            <span>
+              Reproduciendo audio directo con filtro acústico (vídeo pausado).
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                player.setAudioFilter('none');
+                if (player.currentTrack) {
+                  player.playTrack(player.currentTrack, {
+                    skipCrossfade: true,
+                    startSeconds: player.currentTime,
+                  });
+                }
+              }}
+              className="shrink-0 rounded-lg bg-[#D99B38] px-2.5 py-1 text-[11px] font-semibold text-[#0D0E11]"
+            >
+              Ver vídeo
+            </button>
+          </div>
+        )}
         <div
           className={
             showYtOverlay
               ? `aspect-video w-full rounded-xl overflow-hidden bg-black ${
-                  player.activeDeckIndex === 0 ? 'block' : 'hidden'
+                  player.activeDeckMode === 'youtube' && player.activeDeckIndex === 0
+                    ? 'block'
+                    : 'hidden'
                 }`
               : 'w-full h-full'
           }
@@ -440,7 +472,9 @@ export default function App() {
           className={
             showYtOverlay
               ? `aspect-video w-full rounded-xl overflow-hidden bg-black ${
-                  player.activeDeckIndex === 1 ? 'block' : 'hidden'
+                  player.activeDeckMode === 'youtube' && player.activeDeckIndex === 1
+                    ? 'block'
+                    : 'hidden'
                 }`
               : 'w-full h-full'
           }

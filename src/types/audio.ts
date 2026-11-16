@@ -122,6 +122,16 @@ export interface SoundPad {
 
 export type LoopMode = 'none' | 'folder' | 'track';
 
+export type AudioFilterId =
+  | 'none'
+  | 'muffled_house'
+  | 'behind_door'
+  | 'far_away'
+  | 'underwater'
+  | 'echo_cave'
+  | 'cathedral'
+  | 'dream_ethereal';
+
 export interface CrossfadeStatus {
   active: boolean;
   phase?: 'loading' | 'fading';

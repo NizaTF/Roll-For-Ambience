@@ -384,6 +384,240 @@ export async function fetchYouTubeMeta(videoId: string): Promise<{
   }
 }
 
+const PIPED_INSTANCES = [
+  'https://api.piped.private.coffee',
+  'https://pipedapi.ducks.party',
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.leptons.xyz',
+  'https://pipedapi.adminforge.de',
+  'https://pipedapi.nosebs.ru',
+  'https://pipedapi.drgns.space',
+  'https://pipedapi-libre.kavin.rocks',
+];
+
+const INVIDIOUS_INSTANCES = [
+  'https://yewtu.be',
+  'https://inv.nadeko.net',
+  'https://invidious.nerdvpn.de',
+  'https://invidious.tiekoetter.com',
+  'https://yt.chocolatemoo53.com',
+];
+
+interface ResolvedAudioStream {
+  url: string;
+  duration?: number;
+  resolvedAt: number;
+}
+
+const ytAudioStreamCache = new Map<string, ResolvedAudioStream>();
+let cachedDynamicPipedHosts: string[] | null = null;
+
+export function invalidateYouTubeAudioStream(videoId: string): void {
+  ytAudioStreamCache.delete(videoId);
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 4500): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()) as Record<string, unknown>;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function probeCorsMediaUrl(url: string, timeoutMs = 4000): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      mode: 'cors',
+      headers: { Range: 'bytes=0-1023' },
+      signal: controller.signal,
+    });
+    const okStatus = res.ok || res.status === 206;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const isMediaContent =
+      !ct.includes('text/html') &&
+      !ct.includes('application/json') &&
+      !ct.includes('text/plain');
+    try {
+      await res.body?.cancel();
+    } catch {
+      // ignore
+    }
+    return okStatus && isMediaContent;
+  } catch {
+    return false;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function pickFirstPlayableUrl(urls: string[]): Promise<string | null> {
+  const unique = Array.from(new Set(urls.filter((u) => typeof u === 'string' && u.startsWith('http'))));
+  for (const url of unique.slice(0, 4)) {
+    if (await probeCorsMediaUrl(url)) {
+      return url;
+    }
+  }
+  return null;
+}
+
+async function tryPipedInstance(instance: string, videoId: string): Promise<ResolvedAudioStream> {
+  const data = await fetchJsonWithTimeout(
+    `${instance}/streams/${encodeURIComponent(videoId)}`,
+    4500
+  );
+  const audioStreams = Array.isArray(data.audioStreams)
+    ? (data.audioStreams as Array<Record<string, unknown>>)
+    : [];
+
+  const usableAudio = audioStreams
+    .filter((s) => typeof s.url === 'string' && s.url.startsWith('http'))
+    .sort((a, b) => {
+      const aM4a = String(a.mimeType || '').includes('mp4') ? 1 : 0;
+      const bM4a = String(b.mimeType || '').includes('mp4') ? 1 : 0;
+      if (aM4a !== bM4a) return bM4a - aM4a;
+      return Number(b.bitrate || 0) - Number(a.bitrate || 0);
+    });
+
+  const preferredAudio = usableAudio.find((s) => Number(s.bitrate || 0) <= 192000);
+  const candidates: string[] = [];
+  if (preferredAudio) candidates.push(String(preferredAudio.url));
+  for (const s of usableAudio) {
+    candidates.push(String(s.url));
+  }
+
+  // Fallback to combined progressive MP4 streams (exclude broken odycdn mirrors)
+  if (Array.isArray(data.videoStreams)) {
+    const videoStreams = data.videoStreams as Array<Record<string, unknown>>;
+    for (const s of videoStreams) {
+      const url = String(s.url || '');
+      const mime = String(s.mimeType || '');
+      if (
+        url.startsWith('http') &&
+        !s.videoOnly &&
+        mime.includes('mp4') &&
+        !url.includes('odycdn.com')
+      ) {
+        candidates.push(url);
+      }
+    }
+  }
+
+  const verifiedUrl = await pickFirstPlayableUrl(candidates);
+  if (!verifiedUrl) throw new Error('No playable CORS stream from Piped');
+
+  const dur = typeof data.duration === 'number' && data.duration > 0 ? data.duration : undefined;
+
+  return {
+    url: verifiedUrl,
+    duration: dur,
+    resolvedAt: Date.now(),
+  };
+}
+
+async function tryInvidiousInstance(instance: string, videoId: string): Promise<ResolvedAudioStream> {
+  const data = await fetchJsonWithTimeout(
+    `${instance}/api/v1/videos/${encodeURIComponent(videoId)}`,
+    4500
+  );
+  const formats = Array.isArray(data.adaptiveFormats)
+    ? (data.adaptiveFormats as Array<Record<string, unknown>>)
+    : [];
+
+  const audioFormats = formats
+    .filter((f) => String(f.type || '').startsWith('audio/') && f.itag)
+    .sort((a, b) => {
+      const aMp4 = String(a.type || '').includes('mp4') ? 1 : 0;
+      const bMp4 = String(b.type || '').includes('mp4') ? 1 : 0;
+      if (aMp4 !== bMp4) return bMp4 - aMp4;
+      return Number(b.bitrate || 0) - Number(a.bitrate || 0);
+    });
+
+  if (!audioFormats.length) throw new Error('No audio adaptiveFormats');
+  const chosen = audioFormats.find((f) => Number(f.bitrate || 0) <= 192000) || audioFormats[0];
+  const dur = typeof data.lengthSeconds === 'number' && data.lengthSeconds > 0 ? data.lengthSeconds : undefined;
+
+  const proxiedUrl = `${instance}/latest_version?id=${encodeURIComponent(
+    videoId
+  )}&itag=${encodeURIComponent(String(chosen.itag))}&local=true`;
+
+  const verifiedUrl = await pickFirstPlayableUrl([proxiedUrl]);
+  if (!verifiedUrl) throw new Error('Invidious local proxy rejected CORS probe');
+
+  return {
+    url: verifiedUrl,
+    duration: dur,
+    resolvedAt: Date.now(),
+  };
+}
+
+async function getDynamicPipedInstances(): Promise<string[]> {
+  if (cachedDynamicPipedHosts) return cachedDynamicPipedHosts;
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(
+      'https://raw.githubusercontent.com/TeamPiped/documentation/main/content/docs/public-instances/index.md',
+      { signal: controller.signal }
+    );
+    window.clearTimeout(timer);
+    if (!res.ok) return [];
+    const md = await res.text();
+    const matches = md.match(/https:\/\/[a-zA-Z0-9.-]+/g) || [];
+    const known = new Set(PIPED_INSTANCES);
+    const extra = Array.from(new Set(matches)).filter(
+      (u) =>
+        !known.has(u) &&
+        !u.includes('github.com') &&
+        !u.includes('piped.video') &&
+        !u.includes('shields.io')
+    );
+    cachedDynamicPipedHosts = extra;
+    return extra;
+  } catch {
+    return [];
+  }
+}
+
+export async function resolveYouTubeAudioStream(
+  videoId: string
+): Promise<ResolvedAudioStream | null> {
+  const cached = ytAudioStreamCache.get(videoId);
+  if (cached && Date.now() - cached.resolvedAt < 15 * 60 * 1000) {
+    return cached;
+  }
+
+  try {
+    const first = await Promise.any([
+      ...PIPED_INSTANCES.map((inst) => tryPipedInstance(inst, videoId)),
+      ...INVIDIOUS_INSTANCES.map((inst) => tryInvidiousInstance(inst, videoId)),
+    ]);
+    ytAudioStreamCache.set(videoId, first);
+    return first;
+  } catch {
+    // Second-chance sweep against fresh dynamic Piped instances from TeamPiped docs
+    const extras = await getDynamicPipedInstances();
+    if (extras.length > 0) {
+      try {
+        const recovered = await Promise.any(
+          extras.slice(0, 8).map((inst) => tryPipedInstance(inst, videoId))
+        );
+        ytAudioStreamCache.set(videoId, recovered);
+        return recovered;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 export function formatDuration(seconds?: number): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '--:--';
   const total = Math.floor(seconds);

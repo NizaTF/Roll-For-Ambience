@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { audioFilterEngine } from '../services/audioFilters';
+import {
+  invalidateYouTubeAudioStream,
+  resolveYouTubeAudioStream,
+} from '../services/freeMusicApi';
 import {
   cacheTrackIntro,
   getCachedIntroSync,
   hydrateIntroCache,
   warmTracksIntroCache,
 } from '../services/introCache';
-import { CrossfadeStatus, LoopMode, Track } from '../types/audio';
+import { AudioFilterId, CrossfadeStatus, LoopMode, Track } from '../types/audio';
 
 interface YTPlayer {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
@@ -72,18 +77,37 @@ interface DeckInstance {
   ytTargetVolume: number;
   ytRetryTimer: number | null;
   ytStallTimer: number | null;
+  currentVolume: number;
+  ownerSessionId: number;
+  activeAudioSrc: string;
   mode: DeckMode;
   track: Track | null;
+}
+
+function getYtFallbackGainFactor(filterId: AudioFilterId): number {
+  switch (filterId) {
+    case 'far_away':
+      return 0.45;
+    case 'behind_door':
+      return 0.65;
+    case 'muffled_house':
+      return 0.78;
+    default:
+      return 1;
+  }
 }
 
 const PREFS_KEY = 'rfa_dnd_player_prefs_v1';
 const LEGACY_PREFS_KEY = 'bardo_dnd_player_prefs_v1';
 const PLAYBACK_SNAPSHOT_KEY = 'rfa_dnd_playback_snapshot_v1';
 const MAX_YT_RETRIES = 3;
+const SILENT_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
 interface PlayerPrefs {
   crossfadeSeconds: number;
   introCacheSeconds: number;
+  audioFilter: AudioFilterId;
   masterVolume: number;
   loopMode: LoopMode;
   shuffle: boolean;
@@ -109,6 +133,8 @@ function loadPrefs(): PlayerPrefs {
           typeof parsed.crossfadeSeconds === 'number' ? parsed.crossfadeSeconds : 4,
         introCacheSeconds:
           typeof parsed.introCacheSeconds === 'number' ? parsed.introCacheSeconds : 8,
+        audioFilter:
+          typeof parsed.audioFilter === 'string' ? (parsed.audioFilter as AudioFilterId) : 'none',
         masterVolume:
           typeof parsed.masterVolume === 'number' ? parsed.masterVolume : 0.85,
         loopMode:
@@ -124,6 +150,7 @@ function loadPrefs(): PlayerPrefs {
   return {
     crossfadeSeconds: 4,
     introCacheSeconds: 8,
+    audioFilter: 'none',
     masterVolume: 0.85,
     loopMode: 'folder',
     shuffle: false,
@@ -208,6 +235,9 @@ function createEmptyDeck(): DeckInstance {
     ytTargetVolume: 0.85,
     ytRetryTimer: null,
     ytStallTimer: null,
+    currentVolume: 0.85,
+    ownerSessionId: 0,
+    activeAudioSrc: '',
     mode: 'idle',
     track: null,
   };
@@ -231,7 +261,9 @@ export function useDualDeckPlayer() {
     initialSnapshot?.duration || initialSnapshot?.track?.duration || 0
   );
   const [playerError, setPlayerError] = useState<string | null>(null);
+  const [filterStatusNote, setFilterStatusNote] = useState<string | null>(null);
   const [activeDeckIndex, setActiveDeckIndex] = useState<0 | 1>(0);
+  const [activeDeckMode, setActiveDeckMode] = useState<DeckMode>('idle');
   const [pendingResumeTime, setPendingResumeTime] = useState<number | null>(
     initialSnapshot && initialSnapshot.wasPlaying ? initialSnapshot.currentTime : null
   );
@@ -240,6 +272,7 @@ export function useDualDeckPlayer() {
   const [introCacheSeconds, setIntroCacheSeconds] = useState<number>(
     initialPrefs.introCacheSeconds
   );
+  const [audioFilter, setAudioFilterState] = useState<AudioFilterId>(initialPrefs.audioFilter);
   const [masterVolume, setMasterVolume] = useState<number>(initialPrefs.masterVolume);
   const [loopMode, setLoopMode] = useState<LoopMode>(initialPrefs.loopMode);
   const [shuffle, setShuffle] = useState<boolean>(initialPrefs.shuffle);
@@ -262,6 +295,7 @@ export function useDualDeckPlayer() {
         JSON.stringify({
           crossfadeSeconds,
           introCacheSeconds,
+          audioFilter,
           masterVolume,
           loopMode,
           shuffle,
@@ -270,7 +304,7 @@ export function useDualDeckPlayer() {
     } catch {
       // ignore
     }
-  }, [crossfadeSeconds, introCacheSeconds, masterVolume, loopMode, shuffle]);
+  }, [crossfadeSeconds, introCacheSeconds, audioFilter, masterVolume, loopMode, shuffle]);
 
   const decksRef = useRef<[DeckInstance, DeckInstance] | null>(null);
   if (!decksRef.current && typeof Audio !== 'undefined') {
@@ -282,6 +316,7 @@ export function useDualDeckPlayer() {
   const masterVolumeRef = useRef(masterVolume);
   const crossfadeSecRef = useRef(crossfadeSeconds);
   const introCacheSecRef = useRef(introCacheSeconds);
+  const audioFilterRef = useRef<AudioFilterId>(audioFilter);
   const loopModeRef = useRef(loopMode);
   const shuffleRef = useRef(shuffle);
   const queueRef = useRef<Track[]>(queue);
@@ -304,6 +339,7 @@ export function useDualDeckPlayer() {
   masterVolumeRef.current = masterVolume;
   crossfadeSecRef.current = crossfadeSeconds;
   introCacheSecRef.current = introCacheSeconds;
+  audioFilterRef.current = audioFilter;
   loopModeRef.current = loopMode;
   shuffleRef.current = shuffle;
   queueRef.current = queue;
@@ -375,15 +411,55 @@ export function useDualDeckPlayer() {
     }
   }, []);
 
+  const routeElementWithFilterIfNeeded = useCallback(
+    (audioEl: HTMLAudioElement, reloadSrc?: string) => {
+      if (audioFilterRef.current === 'none' && !audioFilterEngine.isElementAttached(audioEl)) {
+        return;
+      }
+      audioFilterEngine.applyPreset(audioFilterRef.current);
+
+      const src = audioEl.currentSrc || audioEl.src || '';
+      const isBlob = src.startsWith('blob:');
+      const needsCorsReload = !isBlob && audioEl.crossOrigin !== 'anonymous';
+
+      if (needsCorsReload && reloadSrc) {
+        const savedPos = audioEl.currentTime || 0;
+        const wasPlaying = !audioEl.paused;
+        audioEl.crossOrigin = 'anonymous';
+        audioEl.src = reloadSrc;
+        audioEl.load();
+        const onMeta = () => {
+          audioEl.removeEventListener('loadedmetadata', onMeta);
+          if (savedPos > 0.2) {
+            try {
+              audioEl.currentTime = savedPos;
+            } catch {
+              // ignore
+            }
+          }
+          if (wasPlaying) {
+            audioEl.play().catch(() => {});
+          }
+        };
+        audioEl.addEventListener('loadedmetadata', onMeta);
+      }
+
+      audioFilterEngine.attachAudioElement(audioEl);
+    },
+    []
+  );
+
   const setDeckVolume = useCallback((deckIdx: 0 | 1, linearVol: number) => {
     const deck = decksRef.current?.[deckIdx];
     if (!deck) return;
     const clamped = Math.max(0, Math.min(1, linearVol));
+    deck.currentVolume = clamped;
     deck.audio.volume = clamped;
-    deck.ytTargetVolume = clamped;
+    const ytAdjusted = clamped * getYtFallbackGainFactor(audioFilterRef.current);
+    deck.ytTargetVolume = ytAdjusted;
     if (deck.ytPlayer) {
       try {
-        deck.ytPlayer.setVolume(Math.round(clamped * 100));
+        deck.ytPlayer.setVolume(Math.round(ytAdjusted * 100));
       } catch {
         // ignore
       }
@@ -408,7 +484,9 @@ export function useDualDeckPlayer() {
       deck.audio.pause();
       deck.audio.removeAttribute('src');
       deck.audio.load();
+      deck.activeAudioSrc = '';
       deck.reportedFullDuration = 0;
+      deck.currentVolume = 0;
 
       if (deck.ytPlayer) {
         try {
@@ -420,6 +498,9 @@ export function useDualDeckPlayer() {
       deck.mode = 'idle';
       deck.track = null;
       deck.ytRetryCount = 0;
+      if (activeDeckRef.current === deckIdx) {
+        setActiveDeckMode('idle');
+      }
     },
     [clearDeckIntroArtifacts, clearDeckYTTimers]
   );
@@ -438,6 +519,9 @@ export function useDualDeckPlayer() {
 
   const handleTrackEndedRef = useRef<(deckIdx: 0 | 1) => void>(() => {});
   const retryYouTubeDeckRef = useRef<(deckIdx: 0 | 1, reason?: string) => void>(() => {});
+  const fallbackYouTubeToIframeRef = useRef<
+    (deckIdx: 0 | 1, track: Track, posSeconds: number, initialVol?: number) => Promise<void>
+  >(async () => {});
   const promoteFullAudioRef = useRef<(deckIdx: 0 | 1, seekOverride?: number) => Promise<boolean>>(
     async () => false
   );
@@ -481,12 +565,58 @@ export function useDualDeckPlayer() {
           promoteFullAudioRef.current(deckIdx, deck.introCachedDuration);
           return;
         }
+        // Guard against unexpected stream truncation early in a long track (never treat 10s cutoff as track end)
+        if (deck && !isIntroChunk) {
+          const expectedDur = Math.max(
+            deck.reportedFullDuration || 0,
+            deck.track?.duration || 0
+          );
+          const pos = audioEl.currentTime || 0;
+          const retries = Number(audioEl.dataset.recoveryCount || '0');
+          if (expectedDur > 25 && pos > 1 && pos < expectedDur * 0.65 && deck.track && retries < 2) {
+            audioEl.dataset.recoveryCount = String(retries + 1);
+            if (activeDeckRef.current === deckIdx) {
+              setIsBuffering(true);
+            }
+            const base = deck.activeAudioSrc || deck.track.url;
+            const sep = base.includes('?') ? '&' : '?';
+            const resumeUrl = /^https?:/i.test(base) ? `${base}${sep}_r=${Date.now()}` : base;
+            audioEl.src = resumeUrl;
+            audioEl.load();
+            const seekResume = () => {
+              audioEl.removeEventListener('loadedmetadata', seekResume);
+              try {
+                audioEl.currentTime = pos;
+              } catch {
+                // ignore
+              }
+              if (isPlayingRef.current) {
+                audioEl.play().catch(() => {});
+              }
+            };
+            audioEl.addEventListener('loadedmetadata', seekResume);
+            return;
+          }
+        }
         if (activeDeckRef.current === deckIdx) {
           handleTrackEndedRef.current(deckIdx);
         }
       };
       audioEl.onerror = () => {
         if (isIntroChunk) return;
+        const deck = decksRef.current?.[deckIdx];
+        if (deck && deck.track?.source === 'youtube' && deck.track.youtubeId) {
+          const videoId = deck.track.youtubeId;
+          const pos = audioEl.currentTime || currentTimeRef.current || 0;
+          const savedTrack = deck.track;
+          const vol = deck.currentVolume;
+          invalidateYouTubeAudioStream(videoId);
+          setFilterStatusNote(
+            'Se ha vuelto al reproductor de YouTube estándar (solo atenuación de volumen).'
+          );
+          fallbackYouTubeToIframeRef.current(deckIdx, savedTrack, pos, vol);
+          return;
+        }
         if (activeDeckRef.current === deckIdx) {
           setIsBuffering(false);
           setIsPlaying(false);
@@ -507,10 +637,20 @@ export function useDualDeckPlayer() {
     const full = deck.fullAudio;
     const targetTime =
       seekOverride !== undefined ? seekOverride : Math.max(0, deck.audio.currentTime || 0);
+    const forcedHandoff = seekOverride !== undefined || deck.pendingHandoff;
 
-    // Need metadata or playable data to seek accurately unless forced by seek/ended
-    if (full.readyState < 2 && seekOverride === undefined) {
-      return false;
+    // Require full audio to be ready & actually longer than the intro chunk before early swap
+    if (!forcedHandoff) {
+      if (full.readyState < 3) return false;
+      const fullDur = Number.isFinite(full.duration) ? full.duration : 0;
+      const expectedTrackDur = deck.track?.duration || 0;
+      if (fullDur > 0 && expectedTrackDur > deck.introCachedDuration + 3 && fullDur <= deck.introCachedDuration + 1) {
+        // Avoid swapping to a truncated/cached response shorter than the real song
+        return false;
+      }
+      if (full.seekable.length === 0 || full.seekable.end(0) < targetTime + 0.5) {
+        return false;
+      }
     }
 
     deck.handoffInFlight = true;
@@ -519,7 +659,7 @@ export function useDualDeckPlayer() {
         full.readyState >= 2
           ? Promise.resolve()
           : new Promise<void>((resolve, reject) => {
-              const t = window.setTimeout(() => reject(new Error('timeout')), 10000);
+              const t = window.setTimeout(() => reject(new Error('timeout')), 12000);
               full.oncanplay = () => {
                 window.clearTimeout(t);
                 resolve();
@@ -536,10 +676,34 @@ export function useDualDeckPlayer() {
         return false;
       }
 
-      try {
-        full.currentTime = targetTime;
-      } catch {
-        // ignore seek error before play
+      // Perform seek and wait briefly for 'seeked' so playback resumes at exact timestamp without hitting EOF
+      if (targetTime > 0.2) {
+        await new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(t);
+            full.removeEventListener('seeked', finish);
+            resolve();
+          };
+          const t = window.setTimeout(finish, 1500);
+          full.addEventListener('seeked', finish);
+          try {
+            full.currentTime = targetTime;
+          } catch {
+            finish();
+          }
+        });
+      }
+
+      // If full.ended happened immediately after seek, rewind safely instead of skipping track
+      if (full.ended) {
+        try {
+          full.currentTime = 0;
+        } catch {
+          // ignore
+        }
       }
 
       full.volume = deck.audio.volume;
@@ -572,6 +736,7 @@ export function useDualDeckPlayer() {
         deck.reportedFullDuration = full.duration;
       }
       attachAudioElementListeners(deckIdx, full, false);
+      routeElementWithFilterIfNeeded(full, deck.activeAudioSrc || deck.track?.url);
 
       if (activeDeckRef.current === deckIdx) {
         setIsBuffering(false);
@@ -802,157 +967,170 @@ export function useDualDeckPlayer() {
     }
   }, []);
 
-  const startAndAwaitDeckLoaded = useCallback(
+  const startYouTubeIframeOnDeck = useCallback(
     async (
       deckIdx: 0 | 1,
       track: Track,
       initialVolume: number,
       waitForPlaybackStart: boolean,
-      startSeconds = 0
+      startSeconds = 0,
+      expectedSessionId?: number
+    ) => {
+      const deck = decksRef.current?.[deckIdx];
+      if (!deck || !track.youtubeId) return;
+
+      deck.mode = 'youtube';
+      if (activeDeckRef.current === deckIdx) {
+        setActiveDeckMode('youtube');
+      }
+      deck.ytRetryCount = 0;
+      deck.ytLastStartSeconds = startSeconds;
+      const clampedVol = Math.max(0, Math.min(1, initialVolume));
+      deck.currentVolume = clampedVol;
+      const ytAdjusted = clampedVol * getYtFallbackGainFactor(audioFilterRef.current);
+      deck.ytTargetVolume = ytAdjusted;
+
+      await ensureYouTubePlayers();
+      if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+        return;
+      }
+      const yt = decksRef.current?.[deckIdx]?.ytPlayer;
+      if (!yt) {
+        throw new Error('No se pudo inicializar el reproductor de YouTube');
+      }
+
+      const waitPromise = waitForPlaybackStart
+        ? new Promise<void>((resolve, reject) => {
+            const timeout = window.setTimeout(() => {
+              ytWaitersRef.current[deckIdx] = null;
+              ytErrorWaitersRef.current[deckIdx] = null;
+              resolve();
+            }, 16000);
+
+            ytWaitersRef.current[deckIdx] = () => {
+              window.clearTimeout(timeout);
+              resolve();
+            };
+            ytErrorWaitersRef.current[deckIdx] = (msg: string) => {
+              window.clearTimeout(timeout);
+              reject(new Error(msg));
+            };
+          })
+        : Promise.resolve();
+
+      yt.setVolume(Math.round(ytAdjusted * 100));
+      yt.loadVideoById(track.youtubeId, startSeconds);
+      yt.playVideo();
+
+      // Guard against silent connection blocks / stalls
+      deck.ytStallTimer = window.setTimeout(() => {
+        try {
+          const state = yt.getPlayerState?.();
+          if (
+            deck.mode === 'youtube' &&
+            deck.track?.youtubeId === track.youtubeId &&
+            state !== window.YT?.PlayerState.PLAYING
+          ) {
+            retryYouTubeDeckRef.current(deckIdx, 'stall');
+          }
+        } catch {
+          retryYouTubeDeckRef.current(deckIdx, 'stall');
+        }
+      }, 4500);
+
+      await waitPromise;
+    },
+    [ensureYouTubePlayers]
+  );
+
+  fallbackYouTubeToIframeRef.current = async (
+    deckIdx: 0 | 1,
+    track: Track,
+    posSeconds: number,
+    initialVol?: number
+  ) => {
+    const deck = decksRef.current?.[deckIdx];
+    if (!deck || deck.track?.id !== track.id) return;
+    deck.audio.onplaying = null;
+    deck.audio.onwaiting = null;
+    deck.audio.oncanplay = null;
+    deck.audio.onended = null;
+    deck.audio.onerror = null;
+    deck.audio.onloadedmetadata = null;
+    deck.audio.pause();
+    deck.audio.removeAttribute('src');
+    deck.audio.load();
+    deck.activeAudioSrc = '';
+
+    try {
+      await startYouTubeIframeOnDeck(
+        deckIdx,
+        track,
+        initialVol ?? masterVolumeRef.current,
+        false,
+        posSeconds,
+        deck.ownerSessionId
+      );
+      if (activeDeckRef.current === deckIdx && !isPlayingRef.current) {
+        deck.ytPlayer?.pauseVideo();
+      }
+    } catch {
+      if (activeDeckRef.current === deckIdx) {
+        setIsBuffering(false);
+        setPlayerError('No se pudo cargar este vídeo de YouTube.');
+      }
+    }
+  };
+
+  const playResolvedAudioUrlOnDeck = useCallback(
+    async (
+      deckIdx: 0 | 1,
+      track: Track,
+      streamUrl: string,
+      initialVolume: number,
+      waitForPlaybackStart: boolean,
+      startSeconds = 0,
+      expectedSessionId?: number,
+      forceCors = false
     ) => {
       const deck = decksRef.current?.[deckIdx];
       if (!deck) return;
 
-      ytWaitersRef.current[deckIdx] = null;
-      ytErrorWaitersRef.current[deckIdx] = null;
-      clearDeckYTTimers(deck);
-      clearDeckIntroArtifacts(deck);
-
-      deck.audio.pause();
-      if (deck.ytPlayer) {
-        try {
-          deck.ytPlayer.stopVideo();
-        } catch {
-          // ignore
-        }
-      }
-
-      deck.track = track;
-      deck.reportedFullDuration = track.duration || 0;
-      setPlayerError(null);
-
-      if (track.source === 'youtube' && track.youtubeId) {
-        deck.mode = 'youtube';
-        deck.ytRetryCount = 0;
-        deck.ytLastStartSeconds = startSeconds;
-        deck.ytTargetVolume = Math.max(0, Math.min(1, initialVolume));
-
-        await ensureYouTubePlayers();
-        const yt = decksRef.current?.[deckIdx]?.ytPlayer;
-        if (!yt) {
-          throw new Error('No se pudo inicializar el reproductor de YouTube');
-        }
-
-        const waitPromise = waitForPlaybackStart
-          ? new Promise<void>((resolve, reject) => {
-              const timeout = window.setTimeout(() => {
-                ytWaitersRef.current[deckIdx] = null;
-                ytErrorWaitersRef.current[deckIdx] = null;
-                resolve();
-              }, 16000);
-
-              ytWaitersRef.current[deckIdx] = () => {
-                window.clearTimeout(timeout);
-                resolve();
-              };
-              ytErrorWaitersRef.current[deckIdx] = (msg: string) => {
-                window.clearTimeout(timeout);
-                reject(new Error(msg));
-              };
-            })
-          : Promise.resolve();
-
-        yt.setVolume(Math.round(deck.ytTargetVolume * 100));
-        yt.loadVideoById(track.youtubeId, startSeconds);
-        yt.playVideo();
-
-        // Guard against silent connection blocks / stalls
-        deck.ytStallTimer = window.setTimeout(() => {
-          try {
-            const state = yt.getPlayerState?.();
-            if (
-              deck.mode === 'youtube' &&
-              deck.track?.youtubeId === track.youtubeId &&
-              state !== window.YT?.PlayerState.PLAYING
-            ) {
-              retryYouTubeDeckRef.current(deckIdx, 'stall');
-            }
-          } catch {
-            retryYouTubeDeckRef.current(deckIdx, 'stall');
-          }
-        }, 4500);
-
-        await waitPromise;
-        return;
-      }
-
       deck.mode = 'audio';
-
-      // Check if we have a cached X-second intro in IndexedDB/memory for instant 0ms start!
-      const introSec = introCacheSecRef.current;
-      const cachedIntro =
-        introSec > 0 ? getCachedIntroSync(track.id, introSec) : null;
-
-      if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.5)) {
-        const blobUrl = URL.createObjectURL(cachedIntro.blob);
-        deck.introBlobUrl = blobUrl;
-        deck.usingCachedIntro = true;
-        deck.introCachedDuration = cachedIntro.cachedDuration;
-        deck.pendingHandoff = false;
-        deck.handoffInFlight = false;
-
-        const introAudio = deck.audio;
-        introAudio.src = blobUrl;
-        introAudio.volume = Math.max(0, Math.min(1, initialVolume));
-        introAudio.loop = false;
-
-        if (startSeconds > 0) {
-          const applySeek = () => {
-            try {
-              introAudio.currentTime = startSeconds;
-            } catch {
-              // ignore
-            }
-            introAudio.removeEventListener('loadedmetadata', applySeek);
-          };
-          introAudio.addEventListener('loadedmetadata', applySeek);
-        }
-
-        attachAudioElementListeners(deckIdx, introAudio, true);
-
-        // Simultaneously preload the full remote song in the background
-        const fullAudio = new Audio();
-        fullAudio.preload = 'auto';
-        fullAudio.loop = loopModeRef.current === 'track';
-        fullAudio.onloadedmetadata = () => {
-          if (Number.isFinite(fullAudio.duration) && fullAudio.duration > 0) {
-            deck.reportedFullDuration = fullAudio.duration;
-            if (activeDeckRef.current === deckIdx) {
-              setDuration(fullAudio.duration);
-              durationRef.current = fullAudio.duration;
-            }
-          }
-        };
-        fullAudio.oncanplay = () => {
-          if (deck.pendingHandoff) {
-            promoteFullAudioRef.current(deckIdx);
-          }
-        };
-        fullAudio.src = track.url;
-        fullAudio.load();
-        deck.fullAudio = fullAudio;
-
-        await introAudio.play();
-        return;
+      deck.activeAudioSrc = streamUrl;
+      if (activeDeckRef.current === deckIdx) {
+        setActiveDeckMode('audio');
       }
 
-      // No cached intro yet: play remote stream directly and cache its first X seconds in background
-      if (introSec > 0) {
-        cacheTrackIntro(track, introSec);
+      const supportsCorsNaturally =
+        forceCors ||
+        track.source === 'audius' ||
+        streamUrl.includes('archive.org') ||
+        streamUrl.includes('wikimedia.org');
+      const shouldSetCors = supportsCorsNaturally || audioFilterRef.current !== 'none';
+
+      if (!shouldSetCors && audioFilterEngine.isElementAttached(deck.audio)) {
+        deck.audio.onplaying = null;
+        deck.audio.onwaiting = null;
+        deck.audio.oncanplay = null;
+        deck.audio.onended = null;
+        deck.audio.onerror = null;
+        deck.audio.onloadedmetadata = null;
+        deck.audio.pause();
+        deck.audio.removeAttribute('src');
+        deck.audio.load();
+        const freshAudio = new Audio();
+        freshAudio.preload = 'auto';
+        deck.audio = freshAudio;
       }
 
       const audio = deck.audio;
-      audio.src = track.url;
+      if (shouldSetCors) {
+        audio.crossOrigin = 'anonymous';
+      } else {
+        audio.removeAttribute('crossorigin');
+      }
+      audio.src = streamUrl;
       audio.volume = Math.max(0, Math.min(1, initialVolume));
       audio.loop = loopModeRef.current === 'track';
 
@@ -1009,15 +1187,443 @@ export function useDualDeckPlayer() {
         : Promise.resolve();
 
       attachAudioElementListeners(deckIdx, audio, false);
+      routeElementWithFilterIfNeeded(audio, streamUrl);
 
+      if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+        return;
+      }
       await audio.play();
       await readyPromise;
+    },
+    [attachAudioElementListeners, routeElementWithFilterIfNeeded]
+  );
+
+  const setAudioFilter = useCallback(
+    async (filterId: AudioFilterId) => {
+      audioFilterRef.current = filterId;
+      setAudioFilterState(filterId);
+      if (filterId !== 'none') {
+        audioFilterEngine.resume();
+      }
+      audioFilterEngine.applyPreset(filterId);
+      if (filterId === 'none') {
+        setFilterStatusNote(null);
+      }
+
+      const decks = decksRef.current;
+      if (!decks) return;
+
+      for (const idx of [0, 1] as const) {
+        const d = decks[idx];
+        if (d.mode === 'audio' && d.track) {
+          if (filterId !== 'none') {
+            routeElementWithFilterIfNeeded(d.audio, d.activeAudioSrc || d.track.url);
+            if (d.fullAudio) {
+              routeElementWithFilterIfNeeded(d.fullAudio, d.activeAudioSrc || d.track.url);
+            }
+          }
+          continue;
+        }
+
+        // Upgrade a live playing/paused YouTube IFrame deck to CORS-filtered audio when a filter is chosen
+        if (d.mode === 'youtube' && d.track?.source === 'youtube' && d.track.youtubeId) {
+          if (filterId === 'none') {
+            setDeckVolume(idx, d.currentVolume);
+            continue;
+          }
+
+          const track = d.track;
+          const videoId = track.youtubeId;
+          if (!videoId) continue;
+          const trackId = track.id;
+          const initialPos = d.ytPlayer?.getCurrentTime() || currentTimeRef.current || 0;
+          const wasPlaying = isPlayingRef.current;
+          const deckVol = d.currentVolume;
+
+          // Synchronously unlock d.audio inside the user tap so .play() succeeds after async fetch
+          if (wasPlaying) {
+            try {
+              d.audio.removeAttribute('crossorigin');
+              d.audio.src = SILENT_WAV_DATA_URI;
+              d.audio.volume = 0;
+              await d.audio.play();
+              d.audio.pause();
+            } catch {
+              // ignore if browser blocks silent unlock
+            }
+          }
+
+          if (activeDeckRef.current === idx) {
+            setIsBuffering(true);
+            setFilterStatusNote('Buscando flujo de audio filtrable para YouTube...');
+          }
+
+          const resolved = await resolveYouTubeAudioStream(videoId);
+          // Re-validate state after async network resolution
+          if (
+            d.track?.id !== trackId ||
+            d.mode !== 'youtube' ||
+            (audioFilterRef.current as AudioFilterId) === 'none'
+          ) {
+            if (activeDeckRef.current === idx) {
+              setIsBuffering(false);
+            }
+            return;
+          }
+
+          if (!resolved) {
+            if (activeDeckRef.current === idx) {
+              setIsBuffering(false);
+              setFilterStatusNote(
+                'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
+              );
+            }
+            setDeckVolume(idx, deckVol);
+            return;
+          }
+
+          if (resolved.duration && !d.reportedFullDuration) {
+            d.reportedFullDuration = resolved.duration;
+            if (activeDeckRef.current === idx) {
+              setDuration(resolved.duration);
+              durationRef.current = resolved.duration;
+            }
+          }
+
+          const audio = d.audio;
+          audio.onplaying = null;
+          audio.onwaiting = null;
+          audio.oncanplay = null;
+          audio.onended = null;
+          audio.onerror = null;
+          audio.onloadedmetadata = null;
+
+          try {
+            audio.crossOrigin = 'anonymous';
+            audio.src = resolved.url;
+            audio.volume = Math.max(0, Math.min(1, deckVol));
+            audio.loop = loopModeRef.current === 'track';
+            audio.load();
+
+            await new Promise<void>((resolve, reject) => {
+              let settled = false;
+              const finish = (err?: Error) => {
+                if (settled) return;
+                settled = true;
+                window.clearTimeout(t);
+                audio.removeEventListener('canplay', onReady);
+                audio.removeEventListener('loadedmetadata', onReady);
+                audio.removeEventListener('error', onErr);
+                if (err) reject(err);
+                else resolve();
+              };
+              const t = window.setTimeout(() => finish(new Error('timeout')), 9000);
+              const onReady = () => finish();
+              const onErr = () => finish(new Error('stream error'));
+              audio.addEventListener('canplay', onReady);
+              audio.addEventListener('loadedmetadata', onReady);
+              audio.addEventListener('error', onErr);
+            });
+
+            if (
+              d.track?.id !== trackId ||
+              d.mode !== 'youtube' ||
+              (audioFilterRef.current as AudioFilterId) === 'none'
+            ) {
+              if (activeDeckRef.current === idx) setIsBuffering(false);
+              return;
+            }
+
+            const livePos = d.ytPlayer?.getCurrentTime() || initialPos;
+            if (livePos > 0.2) {
+              try {
+                audio.currentTime = livePos;
+              } catch {
+                // ignore
+              }
+            }
+
+            routeElementWithFilterIfNeeded(audio, resolved.url);
+            audioFilterEngine.applyPreset(audioFilterRef.current);
+
+            if (wasPlaying) {
+              await audio.play();
+            }
+
+            // Only stop YouTube IFrame once the filtered audio stream has cleanly taken over
+            clearDeckYTTimers(d);
+            if (d.ytPlayer) {
+              try {
+                d.ytPlayer.stopVideo();
+              } catch {
+                // ignore
+              }
+            }
+
+            d.mode = 'audio';
+            d.activeAudioSrc = resolved.url;
+            attachAudioElementListeners(idx, audio, false);
+            if (activeDeckRef.current === idx) {
+              setActiveDeckMode('audio');
+              setIsBuffering(false);
+              setFilterStatusNote(null);
+            }
+          } catch (err) {
+            const name = err instanceof Error ? err.name : '';
+            if (name === 'NotAllowedError') {
+              // Stream is valid and loaded; ask user to tap Play to resume filtered audio
+              clearDeckYTTimers(d);
+              if (d.ytPlayer) {
+                try {
+                  d.ytPlayer.stopVideo();
+                } catch {
+                  // ignore
+                }
+              }
+              d.mode = 'audio';
+              d.activeAudioSrc = resolved.url;
+              attachAudioElementListeners(idx, audio, false);
+              if (activeDeckRef.current === idx) {
+                setActiveDeckMode('audio');
+                isPlayingRef.current = false;
+                setIsPlaying(false);
+                setIsBuffering(false);
+                setPendingResumeTime(initialPos);
+                setFilterStatusNote('Pulsa Reproducir para escuchar el vídeo con el filtro.');
+              }
+              return;
+            }
+
+            invalidateYouTubeAudioStream(videoId);
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+            if (activeDeckRef.current === idx) {
+              setIsBuffering(false);
+              setFilterStatusNote(
+                'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
+              );
+            }
+            setDeckVolume(idx, deckVol);
+          }
+        }
+      }
+    },
+    [
+      attachAudioElementListeners,
+      clearDeckYTTimers,
+      routeElementWithFilterIfNeeded,
+      setDeckVolume,
+    ]
+  );
+
+  const startAndAwaitDeckLoaded = useCallback(
+    async (
+      deckIdx: 0 | 1,
+      track: Track,
+      initialVolume: number,
+      waitForPlaybackStart: boolean,
+      startSeconds = 0,
+      expectedSessionId?: number
+    ) => {
+      const deck = decksRef.current?.[deckIdx];
+      if (!deck) return;
+
+      ytWaitersRef.current[deckIdx] = null;
+      ytErrorWaitersRef.current[deckIdx] = null;
+      clearDeckYTTimers(deck);
+      clearDeckIntroArtifacts(deck);
+
+      deck.audio.pause();
+      if (deck.ytPlayer) {
+        try {
+          deck.ytPlayer.stopVideo();
+        } catch {
+          // ignore
+        }
+      }
+
+      deck.track = track;
+      deck.activeAudioSrc = '';
+      deck.reportedFullDuration = track.duration || 0;
+      deck.currentVolume = Math.max(0, Math.min(1, initialVolume));
+      if (expectedSessionId !== undefined) {
+        deck.ownerSessionId = expectedSessionId;
+      }
+      setPlayerError(null);
+      setFilterStatusNote(null);
+
+      if (track.source === 'youtube' && track.youtubeId) {
+        // When an acoustic filter is active, resolve CORS-proxied YouTube audio so Web Audio filters work seamlessly
+        if (audioFilterRef.current !== 'none') {
+          audioFilterEngine.resume();
+          try {
+            deck.audio.removeAttribute('crossorigin');
+            deck.audio.src = SILENT_WAV_DATA_URI;
+            deck.audio.volume = 0;
+            await deck.audio.play();
+            deck.audio.pause();
+          } catch {
+            // ignore
+          }
+          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+            return;
+          }
+
+          const resolved = await resolveYouTubeAudioStream(track.youtubeId);
+          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+            return;
+          }
+
+          if (resolved) {
+            if (resolved.duration && !deck.reportedFullDuration) {
+              deck.reportedFullDuration = resolved.duration;
+              if (activeDeckRef.current === deckIdx) {
+                setDuration(resolved.duration);
+                durationRef.current = resolved.duration;
+              }
+            }
+            try {
+              await playResolvedAudioUrlOnDeck(
+                deckIdx,
+                track,
+                resolved.url,
+                initialVolume,
+                waitForPlaybackStart,
+                startSeconds,
+                expectedSessionId,
+                true
+              );
+              return;
+            } catch {
+              invalidateYouTubeAudioStream(track.youtubeId);
+              // Clear failed audio attempt before falling back to official YouTube IFrame
+              deck.audio.pause();
+              deck.audio.removeAttribute('src');
+              deck.audio.load();
+              deck.activeAudioSrc = '';
+              setFilterStatusNote(
+                'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
+              );
+            }
+          } else {
+            setFilterStatusNote(
+              'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
+            );
+          }
+        }
+
+        await startYouTubeIframeOnDeck(
+          deckIdx,
+          track,
+          initialVolume,
+          waitForPlaybackStart,
+          startSeconds,
+          expectedSessionId
+        );
+        return;
+      }
+
+      deck.mode = 'audio';
+      deck.activeAudioSrc = track.url;
+      if (activeDeckRef.current === deckIdx) {
+        setActiveDeckMode('audio');
+      }
+      const supportsCorsNaturally =
+        track.source === 'audius' ||
+        track.url.includes('archive.org') ||
+        track.url.includes('wikimedia.org');
+      const shouldSetCors = supportsCorsNaturally || audioFilterRef.current !== 'none';
+
+      // Check if we have a cached X-second intro in IndexedDB/memory for instant 0ms start!
+      const introSec = introCacheSecRef.current;
+      const cachedIntro =
+        introSec > 0 ? getCachedIntroSync(track.id, introSec) : null;
+
+      if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.5)) {
+        const blobUrl = URL.createObjectURL(cachedIntro.blob);
+        deck.introBlobUrl = blobUrl;
+        deck.usingCachedIntro = true;
+        deck.introCachedDuration = cachedIntro.cachedDuration;
+        deck.pendingHandoff = false;
+        deck.handoffInFlight = false;
+
+        const introAudio = deck.audio;
+        introAudio.removeAttribute('crossorigin');
+        introAudio.src = blobUrl;
+        introAudio.volume = Math.max(0, Math.min(1, initialVolume));
+        introAudio.loop = false;
+
+        if (startSeconds > 0) {
+          const applySeek = () => {
+            try {
+              introAudio.currentTime = startSeconds;
+            } catch {
+              // ignore
+            }
+            introAudio.removeEventListener('loadedmetadata', applySeek);
+          };
+          introAudio.addEventListener('loadedmetadata', applySeek);
+        }
+
+        attachAudioElementListeners(deckIdx, introAudio, true);
+        routeElementWithFilterIfNeeded(introAudio, track.url);
+
+        // Simultaneously preload the full remote song in the background
+        const fullAudio = new Audio();
+        fullAudio.preload = 'auto';
+        if (shouldSetCors) {
+          fullAudio.crossOrigin = 'anonymous';
+        }
+        fullAudio.loop = loopModeRef.current === 'track';
+        fullAudio.onloadedmetadata = () => {
+          if (Number.isFinite(fullAudio.duration) && fullAudio.duration > 0) {
+            deck.reportedFullDuration = fullAudio.duration;
+            if (activeDeckRef.current === deckIdx) {
+              setDuration(fullAudio.duration);
+              durationRef.current = fullAudio.duration;
+            }
+          }
+        };
+        fullAudio.oncanplay = () => {
+          if (deck.pendingHandoff) {
+            promoteFullAudioRef.current(deckIdx);
+          }
+        };
+        fullAudio.src = track.url;
+        fullAudio.load();
+        deck.fullAudio = fullAudio;
+
+        if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+          return;
+        }
+        await introAudio.play();
+        return;
+      }
+
+      // No cached intro yet: play remote stream directly and cache its first X seconds in background
+      if (introSec > 0) {
+        cacheTrackIntro(track, introSec);
+      }
+
+      await playResolvedAudioUrlOnDeck(
+        deckIdx,
+        track,
+        track.url,
+        initialVolume,
+        waitForPlaybackStart,
+        startSeconds,
+        expectedSessionId,
+        supportsCorsNaturally
+      );
     },
     [
       attachAudioElementListeners,
       clearDeckIntroArtifacts,
       clearDeckYTTimers,
-      ensureYouTubePlayers,
+      playResolvedAudioUrlOnDeck,
+      routeElementWithFilterIfNeeded,
+      startYouTubeIframeOnDeck,
     ]
   );
 
@@ -1042,8 +1648,28 @@ export function useDualDeckPlayer() {
 
       setPendingResumeTime(null);
       const sessionId = ++playSessionIdRef.current;
-      const outgoingIdx = activeDeckRef.current;
-      const outgoingDeck = decksRef.current?.[outgoingIdx];
+      const decks = decksRef.current;
+      if (!decks) return;
+
+      // Cancel any active fade cleanly, pick the loudest active deck as the single outgoing source,
+      // and stop any older background deck immediately so rapid song switches always prioritize the newest track!
+      const wasFading = fadeIntervalRef.current !== null;
+      cancelCrossfade();
+      autoCrossfadedRef.current = false;
+
+      let outgoingIdx: 0 | 1 = activeDeckRef.current;
+      if (wasFading || (decks[0].mode !== 'idle' && decks[1].mode !== 'idle')) {
+        const vol0 = decks[0].mode !== 'idle' ? decks[0].currentVolume : -1;
+        const vol1 = decks[1].mode !== 'idle' ? decks[1].currentVolume : -1;
+        outgoingIdx = vol0 >= vol1 ? 0 : 1;
+        const staleIdx: 0 | 1 = outgoingIdx === 0 ? 1 : 0;
+        if (decks[staleIdx].mode !== 'idle') {
+          stopDeck(staleIdx);
+        }
+        activeDeckRef.current = outgoingIdx;
+      }
+
+      const outgoingDeck = decks[outgoingIdx];
       const shouldCrossfade =
         !options?.skipCrossfade &&
         crossfadeSecRef.current > 0 &&
@@ -1052,12 +1678,18 @@ export function useDualDeckPlayer() {
         outgoingDeck.mode !== 'idle' &&
         outgoingDeck.track?.id !== track.id;
 
-      cancelCrossfade();
-      autoCrossfadedRef.current = false;
-
       if (shouldCrossfade) {
         const incomingIdx: 0 | 1 = outgoingIdx === 0 ? 1 : 0;
         const fromTitle = outgoingDeck.track?.title;
+        // Preserve outgoing deck's current gain so interrupting an active fade never jumps volume back up!
+        const initialMasterVol = Math.max(0.01, masterVolumeRef.current);
+        const outVolumeRatio = Math.min(
+          1,
+          Math.max(0.05, outgoingDeck.currentVolume) / initialMasterVol
+        );
+
+        // Immediately mark incoming deck ownership for this session so aborted older loads never kill it
+        decks[incomingIdx].ownerSessionId = sessionId;
 
         setCrossfadeStatus({
           active: true,
@@ -1074,10 +1706,16 @@ export function useDualDeckPlayer() {
             track,
             0,
             true,
-            options?.startSeconds || 0
+            options?.startSeconds || 0,
+            sessionId
           );
         } catch (err) {
-          if (playSessionIdRef.current !== sessionId) return;
+          if (playSessionIdRef.current !== sessionId) {
+            if (decks[incomingIdx].ownerSessionId === sessionId) {
+              stopDeck(incomingIdx);
+            }
+            return;
+          }
           stopDeck(incomingIdx);
           cancelCrossfade();
           setPlayerError(
@@ -1087,12 +1725,15 @@ export function useDualDeckPlayer() {
         }
 
         if (playSessionIdRef.current !== sessionId) {
-          stopDeck(incomingIdx);
+          if (decks[incomingIdx].ownerSessionId === sessionId) {
+            stopDeck(incomingIdx);
+          }
           return;
         }
 
         activeDeckRef.current = incomingIdx;
         setActiveDeckIndex(incomingIdx);
+        setActiveDeckMode(decks[incomingIdx].mode);
         setCurrentTrack(track);
         currentTrackRef.current = track;
         setCurrentTime(options?.startSeconds || 0);
@@ -1130,7 +1771,7 @@ export function useDualDeckPlayer() {
           const gainIn = Math.sin(t * Math.PI * 0.5);
           const vol = masterVolumeRef.current;
 
-          setDeckVolume(outgoingIdx, gainOut * vol);
+          setDeckVolume(outgoingIdx, gainOut * outVolumeRatio * vol);
           setDeckVolume(incomingIdx, gainIn * vol);
 
           setCrossfadeStatus({
@@ -1153,8 +1794,12 @@ export function useDualDeckPlayer() {
       } else {
         const otherIdx: 0 | 1 = outgoingIdx === 0 ? 1 : 0;
         stopDeck(otherIdx);
+        decks[outgoingIdx].ownerSessionId = sessionId;
         activeDeckRef.current = outgoingIdx;
         setActiveDeckIndex(outgoingIdx);
+        setActiveDeckMode(
+          track.source === 'youtube' && audioFilterRef.current === 'none' ? 'youtube' : 'audio'
+        );
         setCurrentTrack(track);
         currentTrackRef.current = track;
         const startAt = options?.startSeconds || 0;
@@ -1173,7 +1818,8 @@ export function useDualDeckPlayer() {
             track,
             masterVolumeRef.current,
             false,
-            startAt
+            startAt,
+            sessionId
           );
           if (playSessionIdRef.current === sessionId) {
             const deck = decksRef.current?.[outgoingIdx];
@@ -1447,18 +2093,19 @@ export function useDualDeckPlayer() {
       } else {
         pos = deck.audio.currentTime || 0;
         if (deck.usingCachedIntro) {
+          // Never report introCachedDuration as full track duration, or auto-crossfade could trigger early!
           dur =
             deck.reportedFullDuration ||
             (deck.fullAudio && Number.isFinite(deck.fullAudio.duration)
               ? deck.fullAudio.duration
               : 0) ||
             deck.track?.duration ||
-            deck.introCachedDuration;
+            0;
 
           // Hand off seamlessly to background-loaded full stream well before cached intro ends
           const handoffThreshold = Math.max(
             1.5,
-            Math.min(deck.introCachedDuration - 1.2, deck.introCachedDuration * 0.7)
+            Math.min(deck.introCachedDuration - 1.2, deck.introCachedDuration * 0.65)
           );
           if (
             pos >= handoffThreshold &&
@@ -1491,6 +2138,7 @@ export function useDualDeckPlayer() {
       const triggerLead = cf + 1.5;
       if (
         isPlayingRef.current &&
+        !deck.usingCachedIntro &&
         cf > 0 &&
         dur > triggerLead + 3 &&
         pos > 2 &&
@@ -1609,7 +2257,9 @@ export function useDualDeckPlayer() {
     currentTime,
     duration,
     playerError,
+    filterStatusNote,
     activeDeckIndex,
+    activeDeckMode,
     pendingResumeTime,
     resumePending,
     dismissPendingResume: () => setPendingResumeTime(null),
@@ -1617,6 +2267,8 @@ export function useDualDeckPlayer() {
     setCrossfadeSeconds,
     introCacheSeconds,
     setIntroCacheSeconds,
+    audioFilter,
+    setAudioFilter,
     warmTracks,
     crossfadeStatus,
     masterVolume,

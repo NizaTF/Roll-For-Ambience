@@ -17,8 +17,9 @@ import {
   Volume2,
   Waves,
 } from 'lucide-react';
+import { AUDIO_FILTER_PRESETS } from '../services/audioFilters';
 import { formatDuration } from '../services/freeMusicApi';
-import { CrossfadeStatus, LoopMode, Track } from '../types/audio';
+import { AudioFilterId, CrossfadeStatus, LoopMode, Track } from '../types/audio';
 
 interface PlayerDeckProps {
   currentTrack: Track | null;
@@ -32,6 +33,10 @@ interface PlayerDeckProps {
   onChangeCrossfade: (sec: number) => void;
   introCacheSeconds: number;
   onChangeIntroCache: (sec: number) => void;
+  audioFilter: AudioFilterId;
+  onChangeAudioFilter: (filterId: AudioFilterId) => void;
+  activeDeckMode?: 'idle' | 'audio' | 'youtube';
+  filterStatusNote?: string | null;
   crossfadeStatus: CrossfadeStatus;
   masterVolume: number;
   onChangeVolume: (vol: number) => void;
@@ -67,6 +72,10 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   onChangeCrossfade,
   introCacheSeconds,
   onChangeIntroCache,
+  audioFilter,
+  onChangeAudioFilter,
+  activeDeckMode = 'idle',
+  filterStatusNote = null,
   crossfadeStatus,
   masterVolume,
   onChangeVolume,
@@ -403,6 +412,49 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Acoustic Environment Filters */}
+      <div className="pt-2 border-t border-white/8 space-y-2">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-[#C7C2B6] font-medium">Ambiente acústico (filtros)</span>
+          <span className="text-[#F2BE63] truncate">
+            {AUDIO_FILTER_PRESETS.find((f) => f.id === audioFilter)?.label || 'Normal'}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-1.5">
+          {AUDIO_FILTER_PRESETS.map((preset) => {
+            const active = audioFilter === preset.id;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                title={preset.description}
+                onClick={() => onChangeAudioFilter(preset.id)}
+                className={`min-h-[40px] px-2 py-1.5 rounded-lg text-[11px] font-medium border transition truncate ${
+                  active
+                    ? 'border-[#D99B38] bg-[#D99B38] text-[#0D0E11] font-semibold'
+                    : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128] hover:text-[#F2F0EB]'
+                }`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+        {filterStatusNote ? (
+          <p className="text-[11px] text-amber-300/90 leading-snug">
+            {filterStatusNote}
+          </p>
+        ) : (
+          audioFilter !== 'none' &&
+          currentTrack?.source === 'youtube' &&
+          activeDeckMode === 'audio' && (
+            <p className="text-[11px] text-[#F2BE63]/90 leading-snug">
+              Filtro acústico aplicado al audio de YouTube en tiempo real.
+            </p>
+          )
+        )}
       </div>
 
       {/* Master Volume */}
