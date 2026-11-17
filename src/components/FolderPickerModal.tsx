@@ -53,7 +53,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe shadow-2xl max-h-[85dvh] flex flex-col"
+        className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-white/10 bg-surface p-5 pb-safe shadow-2xl max-h-[85dvh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-3 sm:hidden" />
@@ -62,7 +62,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           <div className="min-w-0">
             <p className="text-xs text-[#9C988E]">
               Elige 1 o varias carpetas ·{' '}
-              <span className="text-[#F2BE63] font-medium">
+              <span className="text-accent-light font-medium">
                 {containingFolderIds.length}{' '}
                 {containingFolderIds.length === 1 ? 'seleccionada' : 'seleccionadas'}
               </span>
@@ -92,7 +92,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                     folders.map((f) => f.id)
                   )
                 }
-                className="text-[#F2BE63] hover:underline"
+                className="text-accent-light hover:underline"
               >
                 Marcar todas
               </button>
@@ -127,14 +127,14 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                 }
                 className={`w-full min-h-[52px] px-3.5 py-2.5 rounded-xl border flex items-center justify-between gap-3 transition text-left ${
                   isIn
-                    ? 'border-[#D99B38]/60 bg-[#D99B38]/10 text-[#F2F0EB]'
-                    : 'border-white/8 bg-[#1E2128]/60 text-[#D6D2C8] hover:bg-[#1E2128]'
+                    ? 'border-accent/60 bg-accent/10 text-[#F2F0EB]'
+                    : 'border-white/8 bg-elevated/60 text-[#D6D2C8] hover:bg-elevated'
                 }`}
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <span
                     className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                      isIn ? 'bg-[#D99B38] text-[#0D0E11]' : 'bg-white/5 text-[#9C988E]'
+                      isIn ? 'bg-accent text-accent-contrast' : 'bg-white/5 text-[#9C988E]'
                     }`}
                   >
                     <FolderIcon name={folder.icon} className="w-4 h-4" />
@@ -148,7 +148,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                 </div>
                 <span
                   className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
-                    isIn ? 'bg-[#D99B38] text-[#0D0E11]' : 'border border-white/20 text-transparent'
+                    isIn ? 'bg-accent text-accent-contrast' : 'border border-white/20 text-transparent'
                   }`}
                 >
                   <Check className="w-3.5 h-3.5" />
@@ -167,11 +167,11 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
                 onChange={(e) => setNewFolderName(e.target.value)}
                 placeholder="Nombre de la nueva carpeta"
                 autoFocus
-                className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
+                className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-canvas border border-white/15 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-accent"
               />
               <button
                 type="submit"
-                className="min-h-[44px] px-4 rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] shrink-0"
+                className="min-h-[44px] px-4 rounded-xl bg-accent text-accent-contrast text-sm font-semibold hover:bg-accent-light shrink-0"
               >
                 Crear
               </button>
@@ -186,7 +186,7 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="mt-3 w-full min-h-[44px] rounded-xl border border-dashed border-white/20 text-sm font-medium text-[#D6D2C8] hover:border-[#D99B38]/60 hover:text-[#F2BE63] flex items-center justify-center gap-2 transition"
+            className="mt-3 w-full min-h-[44px] rounded-xl border border-dashed border-white/20 text-sm font-medium text-[#D6D2C8] hover:border-accent/60 hover:text-accent-light flex items-center justify-center gap-2 transition"
           >
             <FolderPlus className="w-4 h-4" />
             <span>Nueva carpeta</span>
@@ -211,8 +211,8 @@ export const FolderPickerModal: React.FC<FolderPickerModalProps> = ({
           onClick={onClose}
           className={`mt-2.5 w-full min-h-[46px] rounded-xl text-sm font-semibold transition ${
             containingFolderIds.length > 0
-              ? 'bg-[#D99B38] text-[#0D0E11] hover:bg-[#F2BE63]'
-              : 'bg-[#1E2128] text-[#F2F0EB] hover:bg-[#262A33]'
+              ? 'bg-accent text-accent-contrast hover:bg-accent-light'
+              : 'bg-elevated text-[#F2F0EB] hover:bg-white/10'
           }`}
         >
           {containingFolderIds.length > 0

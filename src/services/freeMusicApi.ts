@@ -104,6 +104,7 @@ const ES_TO_EN_SFX: Record<string, string> = {
   lluvia: 'rain',
   fuego: 'fire crackle',
   hoguera: 'campfire',
+  campamento: 'campfire',
   lobo: 'wolf howl',
   dragon: 'dragon roar',
   dragón: 'dragon roar',
@@ -111,8 +112,10 @@ const ES_TO_EN_SFX: Record<string, string> = {
   arco: 'bow arrow',
   viento: 'wind howl',
   caballo: 'horse gallop',
+  relincho: 'horse neigh',
   campana: 'church bell',
   puerta: 'door creak',
+  portazo: 'door slam',
   monedas: 'coins',
   oro: 'coins',
   magia: 'magic spell',
@@ -128,12 +131,34 @@ const ES_TO_EN_SFX: Record<string, string> = {
   buho: 'owl',
   búho: 'owl',
   agua: 'water stream',
+  cascada: 'waterfall',
   mar: 'ocean waves',
   relampago: 'lightning thunder',
   relámpago: 'lightning thunder',
   taberna: 'tavern crowd',
   escudo: 'shield impact',
   hacha: 'axe swing',
+  fantasma: 'ghost',
+  cadenas: 'chains rattle',
+  cuerno: 'war horn',
+  tambores: 'war drums',
+  tambor: 'drum',
+  cueva: 'cave water drip',
+  pantano: 'swamp frogs',
+  cristal: 'glass shatter',
+  vidrio: 'glass shatter',
+  llave: 'keys jingle',
+  cerradura: 'door lock',
+  golpe: 'punch hit',
+  mordida: 'bite',
+  aleteo: 'wings flapping',
+  alas: 'wings flapping',
+  risa: 'evil laugh',
+  esqueleto: 'bones rattle',
+  huesos: 'bones rattle',
+  monstruo: 'monster growl',
+  portal: 'portal whoosh',
+  trampa: 'trap click',
 };
 
 const SFX_BLOCK_PATTERNS =
@@ -403,14 +428,100 @@ const INVIDIOUS_INSTANCES = [
   'https://yt.chocolatemoo53.com',
 ];
 
-interface ResolvedAudioStream {
+export interface ResolvedAudioStream {
   url: string;
   duration?: number;
   resolvedAt: number;
+  isBackendStream?: boolean;
+  requiresLogin?: boolean;
+}
+
+export interface YouTubeAuthStatus {
+  available: boolean;
+  authenticated: boolean;
+  pending?: {
+    verificationUrl: string;
+    userCode: string;
+    expiresAt: number;
+  } | null;
+  error?: string | null;
 }
 
 const ytAudioStreamCache = new Map<string, ResolvedAudioStream>();
 let cachedDynamicPipedHosts: string[] | null = null;
+let backendAvailableCache: boolean | null = null;
+let backendProbePromise: Promise<boolean> | null = null;
+
+export function isBackendAvailableSync(): boolean | null {
+  return backendAvailableCache;
+}
+
+export async function checkBackendAvailable(): Promise<boolean> {
+  if (backendAvailableCache !== null) return backendAvailableCache;
+  if (backendProbePromise) return backendProbePromise;
+
+  backendProbePromise = (async () => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 1400);
+    try {
+      const res = await fetch('./api/health', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        backendAvailableCache = false;
+        return false;
+      }
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (!ct.includes('application/json')) {
+        backendAvailableCache = false;
+        return false;
+      }
+      const json = (await res.json()) as { ok?: boolean };
+      backendAvailableCache = Boolean(json?.ok);
+      return backendAvailableCache;
+    } catch {
+      backendAvailableCache = false;
+      return false;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  })();
+
+  return backendProbePromise;
+}
+
+export async function getYouTubeAuthStatus(): Promise<YouTubeAuthStatus> {
+  const hasBackend = await checkBackendAvailable();
+  if (!hasBackend) {
+    return { available: false, authenticated: false };
+  }
+  try {
+    const res = await fetch('./api/youtube/auth/status', { cache: 'no-store' });
+    if (!res.ok) return { available: false, authenticated: false };
+    return (await res.json()) as YouTubeAuthStatus;
+  } catch {
+    return { available: false, authenticated: false };
+  }
+}
+
+export async function startYouTubeDeviceAuth(): Promise<YouTubeAuthStatus> {
+  const res = await fetch('./api/youtube/auth/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const json = (await res.json()) as YouTubeAuthStatus;
+  return { ...json, available: true };
+}
+
+export async function logoutYouTubeAuth(): Promise<void> {
+  try {
+    await fetch('./api/youtube/auth/logout', { method: 'POST' });
+    ytAudioStreamCache.clear();
+  } catch {
+    // ignore
+  }
+}
 
 export function invalidateYouTubeAudioStream(videoId: string): void {
   ytAudioStreamCache.delete(videoId);
@@ -585,14 +696,66 @@ async function getDynamicPipedInstances(): Promise<string[]> {
   }
 }
 
+async function tryBackendResolve(videoId: string): Promise<{
+  stream: ResolvedAudioStream | null;
+  requiresLogin: boolean;
+}> {
+  const hasBackend = await checkBackendAvailable();
+  if (!hasBackend) return { stream: null, requiresLogin: false };
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 14000);
+  try {
+    const res = await fetch(`./api/youtube/resolve?v=${encodeURIComponent(videoId)}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!res.ok) return { stream: null, requiresLogin: false };
+    const data = (await res.json()) as {
+      ok?: boolean;
+      streamUrl?: string;
+      duration?: number;
+      reason?: string;
+    };
+    if (data?.ok && data.streamUrl) {
+      const normalizedUrl = data.streamUrl.startsWith('/') ? `.${data.streamUrl}` : data.streamUrl;
+      return {
+        stream: {
+          url: normalizedUrl,
+          duration: typeof data.duration === 'number' && data.duration > 0 ? data.duration : undefined,
+          resolvedAt: Date.now(),
+          isBackendStream: true,
+        },
+        requiresLogin: false,
+      };
+    }
+    return {
+      stream: null,
+      requiresLogin: data?.reason === 'LOGIN_REQUIRED',
+    };
+  } catch {
+    return { stream: null, requiresLogin: false };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 export async function resolveYouTubeAudioStream(
   videoId: string
 ): Promise<ResolvedAudioStream | null> {
   const cached = ytAudioStreamCache.get(videoId);
-  if (cached && Date.now() - cached.resolvedAt < 15 * 60 * 1000) {
+  if (cached && cached.url && Date.now() - cached.resolvedAt < 15 * 60 * 1000) {
     return cached;
   }
 
+  // 1. Prefer same-origin server stream (/api/youtube/resolve -> /api/youtube/stream)
+  const backendResult = await tryBackendResolve(videoId);
+  if (backendResult.stream) {
+    ytAudioStreamCache.set(videoId, backendResult.stream);
+    return backendResult.stream;
+  }
+
+  // 2. Fallback to public Piped / Invidious CORS bridges (static hosting / offline server)
   try {
     const first = await Promise.any([
       ...PIPED_INSTANCES.map((inst) => tryPipedInstance(inst, videoId)),
@@ -601,7 +764,6 @@ export async function resolveYouTubeAudioStream(
     ytAudioStreamCache.set(videoId, first);
     return first;
   } catch {
-    // Second-chance sweep against fresh dynamic Piped instances from TeamPiped docs
     const extras = await getDynamicPipedInstances();
     if (extras.length > 0) {
       try {
@@ -611,8 +773,15 @@ export async function resolveYouTubeAudioStream(
         ytAudioStreamCache.set(videoId, recovered);
         return recovered;
       } catch {
-        return null;
+        // return login marker if backend requested login
       }
+    }
+    if (backendResult.requiresLogin) {
+      return {
+        url: '',
+        resolvedAt: Date.now(),
+        requiresLogin: true,
+      };
     }
     return null;
   }

@@ -55,6 +55,8 @@ function sourceLabel(source: Track['source']): string {
       return 'YouTube';
     case 'audius':
       return 'Audius';
+    case 'local':
+      return 'Archivo local';
     case 'direct':
     default:
       return 'Enlace libre';
@@ -193,8 +195,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           onClick={() => onSelectFolder('all')}
           className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-medium inline-flex items-center gap-2 transition whitespace-nowrap shrink-0 border ${
             selectedFolderId === 'all'
-              ? 'bg-[#D99B38] text-[#0D0E11] border-[#D99B38] font-semibold'
-              : 'bg-[#16181D] text-[#D6D2C8] border-white/8 hover:bg-[#1E2128]'
+              ? 'bg-accent text-accent-contrast border-accent font-semibold'
+              : 'bg-surface text-[#D6D2C8] border-white/8 hover:bg-elevated'
           }`}
         >
           <Music2 className="w-4 h-4" />
@@ -210,15 +212,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               onClick={() => onSelectFolder(folder.id)}
               className={`min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-medium inline-flex items-center gap-2 transition whitespace-nowrap shrink-0 border ${
                 active
-                  ? 'bg-[#D99B38] text-[#0D0E11] border-[#D99B38] font-semibold'
-                  : 'bg-[#16181D] text-[#D6D2C8] border-white/8 hover:bg-[#1E2128]'
+                  ? 'bg-accent text-accent-contrast border-accent font-semibold'
+                  : 'bg-surface text-[#D6D2C8] border-white/8 hover:bg-elevated'
               }`}
             >
               <FolderIcon name={folder.icon} className="w-4 h-4" />
               <span>{folder.name}</span>
               <span
                 className={`text-[11px] tabular-nums ${
-                  active ? 'text-[#0D0E11]/75' : 'text-[#8C887E]'
+                  active ? 'text-accent-contrast/75' : 'text-[#8C887E]'
                 }`}
               >
                 {folder.trackIds.length}
@@ -230,7 +232,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <button
           type="button"
           onClick={() => setShowNewFolderModal(true)}
-          className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-medium inline-flex items-center gap-1.5 border border-dashed border-white/20 text-[#C7C2B6] hover:border-[#D99B38]/60 hover:text-[#F2BE63] transition whitespace-nowrap shrink-0"
+          className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-medium inline-flex items-center gap-1.5 border border-dashed border-white/20 text-[#C7C2B6] hover:border-accent/60 hover:text-accent-light transition whitespace-nowrap shrink-0"
         >
           <FolderPlus className="w-4 h-4" />
           <span>Nueva carpeta</span>
@@ -241,7 +243,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       <div className="flex items-center justify-between gap-2 pt-1">
         <div className="min-w-0 flex items-center gap-2.5">
           {activeFolder && (
-            <span className="w-10 h-10 rounded-xl bg-[#16181D] border border-white/10 text-[#F2BE63] flex items-center justify-center shrink-0">
+            <span className="w-10 h-10 rounded-xl bg-surface border border-white/10 text-accent-light flex items-center justify-center shrink-0">
               <FolderIcon name={activeFolder.icon} className="w-5 h-5" />
             </span>
           )}
@@ -260,7 +262,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <button
               type="button"
               onClick={() => onPlayTrack(tracks[0], tracks, queueTitle)}
-              className="min-h-[44px] px-4 py-2 rounded-xl bg-[#D99B38] text-[#0D0E11] text-xs font-semibold inline-flex items-center gap-2 hover:bg-[#F2BE63] active:scale-[0.98] transition whitespace-nowrap shrink-0"
+              className="min-h-[44px] px-4 py-2 rounded-xl bg-accent text-accent-contrast text-xs font-semibold inline-flex items-center gap-2 hover:bg-accent-light active:scale-[0.98] transition whitespace-nowrap shrink-0"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>Reproducir</span>
@@ -273,7 +275,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               onClick={openEditFolder}
               aria-label="Personalizar icono y nombre de carpeta"
               title="Personalizar carpeta"
-              className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-[#16181D] text-[#C7C2B6] hover:text-[#F2BE63] hover:bg-[#1E2128] flex items-center justify-center transition"
+              className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-surface text-[#C7C2B6] hover:text-accent-light hover:bg-elevated flex items-center justify-center transition"
             >
               <Pencil className="w-4 h-4" />
             </button>
@@ -284,7 +286,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setShowFolderOptions(true)}
             aria-label="Exportar, importar listas y opciones"
             title="Exportar / Importar listas y opciones"
-            className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-[#16181D] text-[#C7C2B6] hover:text-[#F2F0EB] hover:bg-[#1E2128] flex items-center justify-center transition"
+            className="min-w-[44px] min-h-[44px] rounded-xl border border-white/10 bg-surface text-[#C7C2B6] hover:text-[#F2F0EB] hover:bg-elevated flex items-center justify-center transition"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
@@ -295,7 +297,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div
           className={`rounded-xl border px-3.5 py-2.5 text-xs ${
             backupNotice.ok
-              ? 'border-[#D99B38]/40 bg-[#D99B38]/12 text-[#F2BE63]'
+              ? 'border-accent/40 bg-accent/12 text-accent-light'
               : 'border-rose-500/40 bg-rose-500/12 text-rose-200'
           }`}
         >
@@ -312,7 +314,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
             placeholder="Filtrar canciones en esta carpeta..."
-            className="w-full min-h-[44px] pl-10 pr-9 rounded-xl bg-[#16181D] border border-white/8 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]/60"
+            className="w-full min-h-[44px] pl-10 pr-9 rounded-xl bg-surface border border-white/8 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-accent/60"
           />
           {filterText && (
             <button
@@ -329,7 +331,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {/* Track List */}
       {filteredTracks.length === 0 ? (
-        <div className="rounded-2xl border border-white/8 bg-[#16181D] p-6 text-center space-y-3">
+        <div className="rounded-2xl border border-white/8 bg-surface p-6 text-center space-y-3">
           <p className="text-sm text-[#C7C2B6]">
             {tracks.length === 0
               ? 'Esta carpeta está vacía. Añade pistas desde el buscador, pega un enlace de YouTube o importa una lista.'
@@ -339,14 +341,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <button
               type="button"
               onClick={onGoToSearch}
-              className="min-h-[44px] px-4 py-2 rounded-xl bg-[#D99B38] text-[#0D0E11] text-xs font-semibold hover:bg-[#F2BE63] transition"
+              className="min-h-[44px] px-4 py-2 rounded-xl bg-accent text-accent-contrast text-xs font-semibold hover:bg-accent-light transition"
             >
               Buscar canciones
             </button>
           )}
         </div>
       ) : (
-        <div className="rounded-2xl border border-white/8 bg-[#16181D] divide-y divide-white/6 overflow-hidden">
+        <div className="rounded-2xl border border-white/8 bg-surface divide-y divide-white/6 overflow-hidden">
           {filteredTracks.map((track, idx) => {
             const isCurrent = currentTrack?.id === track.id;
             const folderCount = getFoldersContainingTrack(track.id).length;
@@ -355,7 +357,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <div
                 key={track.id}
                 className={`flex items-center gap-2 px-3 py-2.5 min-h-[64px] transition ${
-                  isCurrent ? 'bg-[#D99B38]/10' : 'hover:bg-white/[0.03]'
+                  isCurrent ? 'bg-accent/10' : 'hover:bg-white/[0.03]'
                 }`}
               >
                 <button
@@ -370,8 +372,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   <div
                     className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 overflow-hidden border ${
                       isCurrent
-                        ? 'bg-[#D99B38] text-[#0D0E11] border-[#D99B38]'
-                        : 'bg-[#1E2128] text-[#D6D2C8] border-white/8'
+                        ? 'bg-accent text-accent-contrast border-accent'
+                        : 'bg-elevated text-[#D6D2C8] border-white/8'
                     }`}
                   >
                     {isCurrent && isPlaying ? (
@@ -384,7 +386,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   <div className="min-w-0 flex-1">
                     <div
                       className={`text-sm font-medium truncate ${
-                        isCurrent ? 'text-[#F2BE63]' : 'text-[#F2F0EB]'
+                        isCurrent ? 'text-accent-light' : 'text-[#F2F0EB]'
                       }`}
                     >
                       {track.title}
@@ -438,8 +440,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     title="Modificar carpetas (múltiples carpetas)"
                     className={`min-w-[44px] min-h-[44px] px-2 flex items-center justify-center gap-1 rounded-xl transition ${
                       folderCount > 1
-                        ? 'text-[#F2BE63] bg-[#D99B38]/12 hover:bg-[#D99B38]/20'
-                        : 'text-[#9C988E] hover:text-[#F2BE63] hover:bg-white/5'
+                        ? 'text-accent-light bg-accent/12 hover:bg-accent/20'
+                        : 'text-[#9C988E] hover:text-accent-light hover:bg-white/5'
                     }`}
                   >
                     <FolderCheck className="w-4 h-4" />
@@ -486,7 +488,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <form
             onSubmit={handleCreateSubmit}
             onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe space-y-4 shadow-2xl max-h-[88dvh] flex flex-col"
+            className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-white/10 bg-surface p-5 pb-safe space-y-4 shadow-2xl max-h-[88dvh] flex flex-col"
           >
             <div className="flex items-center justify-between shrink-0">
               <h3 className="font-display text-lg font-semibold text-[#F2F0EB]">
@@ -512,7 +514,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="Ej. Jefe final, Bosque encantado, Ciudad"
                 autoFocus
-                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-canvas border border-white/15 text-sm text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-accent"
               />
             </div>
 
@@ -520,7 +522,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
             <button
               type="submit"
-              className="w-full min-h-[48px] rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] transition shrink-0"
+              className="w-full min-h-[48px] rounded-xl bg-accent text-accent-contrast text-sm font-semibold hover:bg-accent-light transition shrink-0"
             >
               Crear carpeta
             </button>
@@ -537,7 +539,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <form
             onSubmit={handleEditSubmit}
             onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe space-y-4 shadow-2xl max-h-[88dvh] flex flex-col"
+            className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl border border-white/10 bg-surface p-5 pb-safe space-y-4 shadow-2xl max-h-[88dvh] flex flex-col"
           >
             <div className="flex items-center justify-between shrink-0">
               <h3 className="font-display text-lg font-semibold text-[#F2F0EB]">
@@ -554,7 +556,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </div>
 
             <div className="shrink-0 flex items-center gap-2.5">
-              <span className="w-11 h-11 rounded-xl bg-[#0D0E11] border border-[#D99B38]/40 text-[#F2BE63] flex items-center justify-center shrink-0">
+              <span className="w-11 h-11 rounded-xl bg-canvas border border-accent/40 text-accent-light flex items-center justify-center shrink-0">
                 <FolderIcon name={editIcon} className="w-5 h-5" />
               </span>
               <div className="flex-1 min-w-0">
@@ -566,7 +568,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
                   autoFocus
-                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#0D0E11] border border-white/15 text-sm text-[#F2F0EB] focus:outline-none focus:border-[#D99B38]"
+                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-canvas border border-white/15 text-sm text-[#F2F0EB] focus:outline-none focus:border-accent"
                 />
               </div>
             </div>
@@ -575,7 +577,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
             <button
               type="submit"
-              className="w-full min-h-[48px] rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] transition shrink-0"
+              className="w-full min-h-[48px] rounded-xl bg-accent text-accent-contrast text-sm font-semibold hover:bg-accent-light transition shrink-0"
             >
               Guardar cambios
             </button>
@@ -591,7 +593,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-white/10 bg-[#16181D] p-5 pb-safe space-y-3 shadow-2xl"
+            className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl border border-white/10 bg-surface p-5 pb-safe space-y-3 shadow-2xl"
           >
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-semibold text-[#F2F0EB]">
@@ -615,9 +617,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     setShowFolderOptions(false);
                     openEditFolder();
                   }}
-                  className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+                  className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
                 >
-                  <Pencil className="w-4 h-4 text-[#D99B38]" />
+                  <Pencil className="w-4 h-4 text-accent" />
                   <span>Personalizar icono y nombre</span>
                 </button>
 
@@ -627,7 +629,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     onDeleteFolder(activeFolder.id);
                     setShowFolderOptions(false);
                   }}
-                  className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-rose-400 flex items-center gap-3 hover:bg-rose-500/10"
+                  className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-rose-400 flex items-center gap-3 hover:bg-rose-500/10"
                 >
                   <Trash2 className="w-4 h-4" />
                   <span>Eliminar "{activeFolder.name}"</span>
@@ -641,18 +643,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadPlaylist}
-                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
               >
-                <Share2 className="w-4 h-4 text-[#D99B38]" />
+                <Share2 className="w-4 h-4 text-accent" />
                 <span>Exportar lista "{queueTitle}"</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
               >
-                <Upload className="w-4 h-4 text-[#D99B38]" />
+                <Upload className="w-4 h-4 text-accent" />
                 <span>Importar lista o copia de seguridad</span>
               </button>
               <input
@@ -666,9 +668,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadBackup}
-                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-[#262A33]"
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
               >
-                <Download className="w-4 h-4 text-[#D99B38]" />
+                <Download className="w-4 h-4 text-accent" />
                 <span>Exportar todas las listas (copia completa)</span>
               </button>
             </div>
@@ -680,7 +682,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   onResetStarter();
                   setShowFolderOptions(false);
                 }}
-                className="w-full min-h-[46px] px-3.5 rounded-xl bg-[#1E2128] text-sm text-[#C7C2B6] flex items-center gap-3 hover:bg-[#262A33]"
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#C7C2B6] flex items-center gap-3 hover:bg-white/10"
               >
                 <RotateCcw className="w-4 h-4 text-[#9C988E]" />
                 <span>Restaurar carpetas iniciales</span>

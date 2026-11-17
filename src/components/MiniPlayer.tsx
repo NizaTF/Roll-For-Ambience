@@ -29,11 +29,11 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
     duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
   return (
-    <div className="relative bg-[#16181D]/95 backdrop-blur-md border-t border-white/10">
+    <div className="relative bg-surface/95 backdrop-blur-md border-t border-white/10">
       {/* Hairline progress indicator */}
       <div className="h-0.5 w-full bg-white/8 overflow-hidden">
         <div
-          className="h-full bg-[#D99B38] transition-all duration-200"
+          className="h-full bg-accent transition-all duration-200"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -61,7 +61,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
             type="button"
             onClick={onTogglePlay}
             aria-label={isPlaying ? 'Pausar' : 'Reproducir'}
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-[#F2BE63] hover:bg-white/5"
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-accent-light hover:bg-white/5"
           >
             {isBuffering ? (
               <Loader2 className="w-5 h-5 animate-spin" />

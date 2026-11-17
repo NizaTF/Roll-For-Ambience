@@ -1,4 +1,6 @@
 import { Track } from '../types/audio';
+import { checkBackendAvailable } from './freeMusicApi';
+import { isLocalMediaUrl } from './localMedia';
 
 const CACHE_DB_NAME = 'rfa_intro_audio_cache_v1';
 const CACHE_STORE = 'intros';
@@ -157,8 +159,19 @@ export async function cacheTrackIntro(
   track: Track,
   introSeconds: number
 ): Promise<CachedIntroEntry | null> {
-  if (introSeconds <= 0 || track.source === 'youtube' || !track.url) {
+  if (
+    introSeconds <= 0 ||
+    !track.url ||
+    track.source === 'local' ||
+    isLocalMediaUrl(track.url)
+  ) {
     return null;
+  }
+
+  const isYoutube = track.source === 'youtube' && Boolean(track.youtubeId);
+  if (isYoutube) {
+    const hasBackend = await checkBackendAvailable();
+    if (!hasBackend) return null;
   }
 
   const existing = memoryCache.get(track.id);
@@ -178,15 +191,23 @@ export async function cacheTrackIntro(
     // ~44 KB/s handles up to 320 kbps MP3 + ID3 header comfortably
     const targetBytes = Math.min(1_500_000, Math.max(260_000, introSeconds * 44_000 + 80_000));
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 9000);
+    const timeoutId = window.setTimeout(() => controller.abort(), isYoutube ? 14000 : 9000);
 
     try {
-      const res = await fetch(track.url, {
+      const fetchUrl = isYoutube
+        ? `./api/youtube/intro?v=${encodeURIComponent(track.youtubeId!)}&seconds=${encodeURIComponent(
+            String(Math.min(20, Math.max(3, introSeconds)))
+          )}`
+        : track.url;
+
+      const res = await fetch(fetchUrl, {
         method: 'GET',
         cache: 'no-store',
-        headers: {
-          Range: `bytes=0-${targetBytes - 1}`,
-        },
+        headers: isYoutube
+          ? undefined
+          : {
+              Range: `bytes=0-${targetBytes - 1}`,
+            },
         signal: controller.signal,
       });
 
@@ -238,7 +259,7 @@ export async function cacheTrackIntro(
         offset += c.byteLength;
       }
 
-      const mime = guessAudioMime(track.url, contentType);
+      const mime = guessAudioMime(fetchUrl, contentType);
       const blob = new Blob([merged], { type: mime });
       const cachedDuration = await probeBlobAudioDuration(blob);
 
@@ -273,9 +294,11 @@ export async function warmTracksIntroCache(
 ): Promise<void> {
   if (introSeconds <= 0 || !navigator.onLine) return;
 
+  const hasBackend = await checkBackendAvailable();
   const candidates = tracks
     .filter((t) => {
-      if (t.source === 'youtube' || !t.url) return false;
+      if (!t.url || t.source === 'local' || isLocalMediaUrl(t.url)) return false;
+      if (t.source === 'youtube' && !hasBackend) return false;
       const cached = memoryCache.get(t.id);
       return !cached || cached.introSeconds < introSeconds;
     })

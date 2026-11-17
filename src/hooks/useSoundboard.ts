@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { STARTER_SOUNDBOARD } from '../data/starterLibrary';
 import {
+  deleteLocalMedia,
+  isLocalMediaUrl,
+  resolveLocalMediaUrl,
+} from '../services/localMedia';
+import {
   loadIndexedDBJSON,
   loadLocalStorageJSON,
   savePersistedJSON,
@@ -91,6 +96,25 @@ export function useSoundboard() {
         return next;
       });
 
+      let playableUrl = pad.url;
+      if (isLocalMediaUrl(pad.url)) {
+        setLoadingPadIds((prev) => ({ ...prev, [pad.id]: true }));
+        try {
+          playableUrl = await resolveLocalMediaUrl(pad.url);
+        } catch {
+          setLoadingPadIds((prev) => {
+            const next = { ...prev };
+            delete next[pad.id];
+            return next;
+          });
+          setPadErrors((prev) => ({
+            ...prev,
+            [pad.id]: 'Archivo local no disponible',
+          }));
+          return;
+        }
+      }
+
       let audio = audioMapRef.current.get(pad.id);
       if (!audio) {
         audio = new Audio();
@@ -98,8 +122,8 @@ export function useSoundboard() {
         audioMapRef.current.set(pad.id, audio);
       }
 
-      if (audio.src !== pad.url) {
-        audio.src = pad.url;
+      if (audio.src !== playableUrl) {
+        audio.src = playableUrl;
       }
       audio.loop = pad.loop;
       audio.volume = Math.max(0, Math.min(1, pad.volume));
@@ -220,7 +244,18 @@ export function useSoundboard() {
         audio.src = '';
         audioMapRef.current.delete(padId);
       }
-      setPads((prev) => prev.filter((p) => p.id !== padId));
+      setPads((prev) => {
+        const target = prev.find((p) => p.id === padId);
+        const remaining = prev.filter((p) => p.id !== padId);
+        if (
+          target &&
+          isLocalMediaUrl(target.url) &&
+          !remaining.some((p) => p.url === target.url)
+        ) {
+          deleteLocalMedia(target.url);
+        }
+        return remaining;
+      });
     },
     [stopPad]
   );

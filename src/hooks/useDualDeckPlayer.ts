@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { audioFilterEngine } from '../services/audioFilters';
+import { audioFilterEngine, DEFAULT_EQ_BANDS } from '../services/audioFilters';
 import {
+  checkBackendAvailable,
+  getYouTubeAuthStatus,
   invalidateYouTubeAudioStream,
+  logoutYouTubeAuth,
   resolveYouTubeAudioStream,
+  startYouTubeDeviceAuth,
+  YouTubeAuthStatus,
 } from '../services/freeMusicApi';
 import {
   cacheTrackIntro,
@@ -10,7 +15,9 @@ import {
   hydrateIntroCache,
   warmTracksIntroCache,
 } from '../services/introCache';
-import { AudioFilterId, CrossfadeStatus, LoopMode, Track } from '../types/audio';
+import { isLocalMediaUrl, resolveLocalMediaUrl } from '../services/localMedia';
+import { requestAndroidPersistentStorage } from '../services/persistence';
+import { AudioFilterId, CrossfadeStatus, EqualizerBands, LoopMode, Track } from '../types/audio';
 
 interface YTPlayer {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
@@ -84,17 +91,23 @@ interface DeckInstance {
   track: Track | null;
 }
 
-function getYtFallbackGainFactor(filterId: AudioFilterId): number {
+function getYtFallbackGainFactor(filterId: AudioFilterId, intensity = 1): number {
+  let target = 1;
   switch (filterId) {
     case 'far_away':
-      return 0.45;
+      target = 0.45;
+      break;
     case 'behind_door':
-      return 0.65;
+      target = 0.65;
+      break;
     case 'muffled_house':
-      return 0.78;
+      target = 0.78;
+      break;
     default:
-      return 1;
+      target = 1;
   }
+  const s = Math.max(0, Math.min(1, intensity));
+  return 1 + (target - 1) * s;
 }
 
 const PREFS_KEY = 'rfa_dnd_player_prefs_v1';
@@ -108,6 +121,8 @@ interface PlayerPrefs {
   crossfadeSeconds: number;
   introCacheSeconds: number;
   audioFilter: AudioFilterId;
+  filterIntensity: number;
+  equalizer: EqualizerBands;
   masterVolume: number;
   loopMode: LoopMode;
   shuffle: boolean;
@@ -123,6 +138,16 @@ interface PlaybackSnapshot {
   savedAt: number;
 }
 
+function clampEqVal(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
+  return Math.max(-12, Math.min(12, Math.round(n)));
+}
+
+function clampFilterIntensity(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : 1;
+  return Math.max(0, Math.min(1, n));
+}
+
 function loadPrefs(): PlayerPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY) || localStorage.getItem(LEGACY_PREFS_KEY);
@@ -135,6 +160,14 @@ function loadPrefs(): PlayerPrefs {
           typeof parsed.introCacheSeconds === 'number' ? parsed.introCacheSeconds : 8,
         audioFilter:
           typeof parsed.audioFilter === 'string' ? (parsed.audioFilter as AudioFilterId) : 'none',
+        filterIntensity: clampFilterIntensity(parsed.filterIntensity),
+        equalizer: parsed.equalizer
+          ? {
+              bassDb: clampEqVal(parsed.equalizer.bassDb),
+              midDb: clampEqVal(parsed.equalizer.midDb),
+              trebleDb: clampEqVal(parsed.equalizer.trebleDb),
+            }
+          : { ...DEFAULT_EQ_BANDS },
         masterVolume:
           typeof parsed.masterVolume === 'number' ? parsed.masterVolume : 0.85,
         loopMode:
@@ -151,6 +184,8 @@ function loadPrefs(): PlayerPrefs {
     crossfadeSeconds: 4,
     introCacheSeconds: 8,
     audioFilter: 'none',
+    filterIntensity: 1,
+    equalizer: { ...DEFAULT_EQ_BANDS },
     masterVolume: 0.85,
     loopMode: 'folder',
     shuffle: false,
@@ -273,6 +308,14 @@ export function useDualDeckPlayer() {
     initialPrefs.introCacheSeconds
   );
   const [audioFilter, setAudioFilterState] = useState<AudioFilterId>(initialPrefs.audioFilter);
+  const [filterIntensity, setFilterIntensityState] = useState<number>(initialPrefs.filterIntensity);
+  const [equalizer, setEqualizerState] = useState<EqualizerBands>(initialPrefs.equalizer);
+  const [ytAuthStatus, setYtAuthStatus] = useState<YouTubeAuthStatus>({
+    available: false,
+    authenticated: false,
+  });
+  const [ytLoginSuggested, setYtLoginSuggested] = useState(false);
+  const [ytAuthBusy, setYtAuthBusy] = useState(false);
   const [masterVolume, setMasterVolume] = useState<number>(initialPrefs.masterVolume);
   const [loopMode, setLoopMode] = useState<LoopMode>(initialPrefs.loopMode);
   const [shuffle, setShuffle] = useState<boolean>(initialPrefs.shuffle);
@@ -286,6 +329,8 @@ export function useDualDeckPlayer() {
 
   useEffect(() => {
     hydrateIntroCache();
+    requestAndroidPersistentStorage();
+    getYouTubeAuthStatus().then(setYtAuthStatus).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -296,6 +341,8 @@ export function useDualDeckPlayer() {
           crossfadeSeconds,
           introCacheSeconds,
           audioFilter,
+          filterIntensity,
+          equalizer,
           masterVolume,
           loopMode,
           shuffle,
@@ -304,7 +351,16 @@ export function useDualDeckPlayer() {
     } catch {
       // ignore
     }
-  }, [crossfadeSeconds, introCacheSeconds, audioFilter, masterVolume, loopMode, shuffle]);
+  }, [
+    crossfadeSeconds,
+    introCacheSeconds,
+    audioFilter,
+    filterIntensity,
+    equalizer,
+    masterVolume,
+    loopMode,
+    shuffle,
+  ]);
 
   const decksRef = useRef<[DeckInstance, DeckInstance] | null>(null);
   if (!decksRef.current && typeof Audio !== 'undefined') {
@@ -317,6 +373,8 @@ export function useDualDeckPlayer() {
   const crossfadeSecRef = useRef(crossfadeSeconds);
   const introCacheSecRef = useRef(introCacheSeconds);
   const audioFilterRef = useRef<AudioFilterId>(audioFilter);
+  const filterIntensityRef = useRef<number>(filterIntensity);
+  const equalizerRef = useRef<EqualizerBands>(equalizer);
   const loopModeRef = useRef(loopMode);
   const shuffleRef = useRef(shuffle);
   const queueRef = useRef<Track[]>(queue);
@@ -340,6 +398,8 @@ export function useDualDeckPlayer() {
   crossfadeSecRef.current = crossfadeSeconds;
   introCacheSecRef.current = introCacheSeconds;
   audioFilterRef.current = audioFilter;
+  filterIntensityRef.current = filterIntensity;
+  equalizerRef.current = equalizer;
   loopModeRef.current = loopMode;
   shuffleRef.current = shuffle;
   queueRef.current = queue;
@@ -348,6 +408,71 @@ export function useDualDeckPlayer() {
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
   pendingResumeTimeRef.current = pendingResumeTime;
+
+  const hasCustomEq = (bands: EqualizerBands) =>
+    bands.bassDb !== 0 || bands.midDb !== 0 || bands.trebleDb !== 0;
+
+  // Keep AudioFilterEngine synced & auto-resume suspended Web Audio on Android visibility restore
+  useEffect(() => {
+    audioFilterEngine.setPlaybackActive(isPlaying);
+    const onRecover = () => {
+      if (isPlayingRef.current) {
+        audioFilterEngine.resume();
+      }
+    };
+    document.addEventListener('visibilitychange', onRecover);
+    window.addEventListener('pageshow', onRecover);
+    return () => {
+      document.removeEventListener('visibilitychange', onRecover);
+      window.removeEventListener('pageshow', onRecover);
+    };
+  }, [isPlaying]);
+
+  // Hold a Web Lock while playing to prevent low-end Android background throttling/freezing
+  useEffect(() => {
+    if (!isPlaying || typeof navigator === 'undefined' || !('locks' in navigator)) {
+      return;
+    }
+    let releaseLock: (() => void) | null = null;
+    let released = false;
+
+    try {
+      navigator.locks
+        .request('rfa-audio-playback-active', () => {
+          return new Promise<void>((resolve) => {
+            if (released) {
+              resolve();
+            } else {
+              releaseLock = resolve;
+            }
+          });
+        })
+        .catch(() => {});
+    } catch {
+      // ignore unsupported locks
+    }
+
+    return () => {
+      released = true;
+      releaseLock?.();
+    };
+  }, [isPlaying]);
+
+  // Poll YouTube OAuth status while device verification is pending
+  useEffect(() => {
+    if (!ytAuthStatus.available || ytAuthStatus.authenticated || !ytAuthStatus.pending) {
+      return;
+    }
+    const timer = window.setInterval(async () => {
+      const next = await getYouTubeAuthStatus();
+      setYtAuthStatus(next);
+      if (next.authenticated) {
+        setYtLoginSuggested(false);
+        setFilterStatusNote('Cuenta de YouTube vinculada. Filtros y ecualizador listos.');
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [ytAuthStatus.available, ytAuthStatus.authenticated, ytAuthStatus.pending]);
 
   const warmTracks = useCallback((tracks: Track[]) => {
     if (introCacheSecRef.current <= 0 || tracks.length === 0) return;
@@ -412,15 +537,25 @@ export function useDualDeckPlayer() {
   }, []);
 
   const routeElementWithFilterIfNeeded = useCallback(
-    (audioEl: HTMLAudioElement, reloadSrc?: string) => {
-      if (audioFilterRef.current === 'none' && !audioFilterEngine.isElementAttached(audioEl)) {
+    (audioEl: HTMLAudioElement, reloadSrc?: string, alwaysAttachCors = false) => {
+      const needsEqOrFilter =
+        audioFilterRef.current !== 'none' || hasCustomEq(equalizerRef.current);
+
+      if (
+        !needsEqOrFilter &&
+        !alwaysAttachCors &&
+        !audioFilterEngine.isElementAttached(audioEl)
+      ) {
         return;
       }
-      audioFilterEngine.applyPreset(audioFilterRef.current);
+      audioFilterEngine.applyEqualizer(equalizerRef.current);
+      audioFilterEngine.applyPreset(audioFilterRef.current, filterIntensityRef.current);
 
       const src = audioEl.currentSrc || audioEl.src || '';
       const isBlob = src.startsWith('blob:');
-      const needsCorsReload = !isBlob && audioEl.crossOrigin !== 'anonymous';
+      const isSameOriginApi = src.includes('/api/youtube/');
+      const needsCorsReload =
+        !isBlob && !isSameOriginApi && audioEl.crossOrigin !== 'anonymous';
 
       if (needsCorsReload && reloadSrc) {
         const savedPos = audioEl.currentTime || 0;
@@ -455,7 +590,8 @@ export function useDualDeckPlayer() {
     const clamped = Math.max(0, Math.min(1, linearVol));
     deck.currentVolume = clamped;
     deck.audio.volume = clamped;
-    const ytAdjusted = clamped * getYtFallbackGainFactor(audioFilterRef.current);
+    const ytAdjusted =
+      clamped * getYtFallbackGainFactor(audioFilterRef.current, filterIntensityRef.current);
     deck.ytTargetVolume = ytAdjusted;
     if (deck.ytPlayer) {
       try {
@@ -987,7 +1123,8 @@ export function useDualDeckPlayer() {
       deck.ytLastStartSeconds = startSeconds;
       const clampedVol = Math.max(0, Math.min(1, initialVolume));
       deck.currentVolume = clampedVol;
-      const ytAdjusted = clampedVol * getYtFallbackGainFactor(audioFilterRef.current);
+      const ytAdjusted =
+        clampedVol * getYtFallbackGainFactor(audioFilterRef.current, filterIntensityRef.current);
       deck.ytTargetVolume = ytAdjusted;
 
       await ensureYouTubePlayers();
@@ -1102,12 +1239,18 @@ export function useDualDeckPlayer() {
         setActiveDeckMode('audio');
       }
 
+      const isBlobUrl = streamUrl.startsWith('blob:');
       const supportsCorsNaturally =
         forceCors ||
+        isBlobUrl ||
+        track.source === 'local' ||
         track.source === 'audius' ||
+        streamUrl.includes('/api/youtube/') ||
         streamUrl.includes('archive.org') ||
         streamUrl.includes('wikimedia.org');
-      const shouldSetCors = supportsCorsNaturally || audioFilterRef.current !== 'none';
+      const eqOrFilterActive =
+        audioFilterRef.current !== 'none' || hasCustomEq(equalizerRef.current);
+      const shouldSetCors = !isBlobUrl && (supportsCorsNaturally || eqOrFilterActive);
 
       if (!shouldSetCors && audioFilterEngine.isElementAttached(deck.audio)) {
         deck.audio.onplaying = null;
@@ -1187,7 +1330,7 @@ export function useDualDeckPlayer() {
         : Promise.resolve();
 
       attachAudioElementListeners(deckIdx, audio, false);
-      routeElementWithFilterIfNeeded(audio, streamUrl);
+      routeElementWithFilterIfNeeded(audio, streamUrl, supportsCorsNaturally);
 
       if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
         return;
@@ -1198,215 +1341,181 @@ export function useDualDeckPlayer() {
     [attachAudioElementListeners, routeElementWithFilterIfNeeded]
   );
 
-  const setAudioFilter = useCallback(
-    async (filterId: AudioFilterId) => {
-      audioFilterRef.current = filterId;
-      setAudioFilterState(filterId);
-      if (filterId !== 'none') {
-        audioFilterEngine.resume();
+  const upgradeYoutubeDeckToLocalAudio = useCallback(
+    async (idx: 0 | 1) => {
+      const d = decksRef.current?.[idx];
+      if (!d || d.mode !== 'youtube' || d.track?.source !== 'youtube' || !d.track.youtubeId) {
+        return;
       }
-      audioFilterEngine.applyPreset(filterId);
-      if (filterId === 'none') {
-        setFilterStatusNote(null);
+      const track = d.track;
+      const videoId = track.youtubeId!;
+      const trackId = track.id;
+      const initialPos = d.ytPlayer?.getCurrentTime() || currentTimeRef.current || 0;
+      const wasPlaying = isPlayingRef.current;
+      const deckVol = d.currentVolume;
+
+      if (wasPlaying) {
+        try {
+          d.audio.removeAttribute('crossorigin');
+          d.audio.src = SILENT_WAV_DATA_URI;
+          d.audio.volume = 0;
+          await d.audio.play();
+          d.audio.pause();
+        } catch {
+          // ignore
+        }
       }
 
-      const decks = decksRef.current;
-      if (!decks) return;
+      if (activeDeckRef.current === idx) {
+        setIsBuffering(true);
+        setFilterStatusNote('Conectando flujo de audio local para ecualizador...');
+      }
 
-      for (const idx of [0, 1] as const) {
-        const d = decks[idx];
-        if (d.mode === 'audio' && d.track) {
-          if (filterId !== 'none') {
-            routeElementWithFilterIfNeeded(d.audio, d.activeAudioSrc || d.track.url);
-            if (d.fullAudio) {
-              routeElementWithFilterIfNeeded(d.fullAudio, d.activeAudioSrc || d.track.url);
-            }
-          }
-          continue;
+      const resolved = await resolveYouTubeAudioStream(videoId);
+      const stillNeedsAudio =
+        audioFilterRef.current !== 'none' || hasCustomEq(equalizerRef.current);
+
+      if (d.track?.id !== trackId || d.mode !== 'youtube' || !stillNeedsAudio) {
+        if (activeDeckRef.current === idx) setIsBuffering(false);
+        return;
+      }
+
+      if (!resolved || !resolved.url) {
+        if (resolved?.requiresLogin) {
+          setYtLoginSuggested(true);
+        }
+        if (activeDeckRef.current === idx) {
+          setIsBuffering(false);
+          setFilterStatusNote(
+            resolved?.requiresLogin
+              ? 'YouTube pide vincular cuenta en este vídeo para ecualizarlo (puedes seguir escuchándolo en modo estándar).'
+              : 'YouTube bloqueó el flujo directo en este vídeo (el reproductor estándar solo ajusta volumen).'
+          );
+        }
+        setDeckVolume(idx, deckVol);
+        return;
+      }
+
+      if (resolved.duration && !d.reportedFullDuration) {
+        d.reportedFullDuration = resolved.duration;
+        if (activeDeckRef.current === idx) {
+          setDuration(resolved.duration);
+          durationRef.current = resolved.duration;
+        }
+      }
+
+      const audio = d.audio;
+      audio.onplaying = null;
+      audio.onwaiting = null;
+      audio.oncanplay = null;
+      audio.onended = null;
+      audio.onerror = null;
+      audio.onloadedmetadata = null;
+
+      try {
+        audio.crossOrigin = 'anonymous';
+        audio.src = resolved.url;
+        audio.volume = Math.max(0, Math.min(1, deckVol));
+        audio.loop = loopModeRef.current === 'track';
+        audio.load();
+
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (err?: Error) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(t);
+            audio.removeEventListener('canplay', onReady);
+            audio.removeEventListener('loadedmetadata', onReady);
+            audio.removeEventListener('error', onErr);
+            if (err) reject(err);
+            else resolve();
+          };
+          const t = window.setTimeout(() => finish(new Error('timeout')), 10000);
+          const onReady = () => finish();
+          const onErr = () => finish(new Error('stream error'));
+          audio.addEventListener('canplay', onReady);
+          audio.addEventListener('loadedmetadata', onReady);
+          audio.addEventListener('error', onErr);
+        });
+
+        const stillActive =
+          audioFilterRef.current !== 'none' || hasCustomEq(equalizerRef.current);
+        if (d.track?.id !== trackId || d.mode !== 'youtube' || !stillActive) {
+          if (activeDeckRef.current === idx) setIsBuffering(false);
+          return;
         }
 
-        // Upgrade a live playing/paused YouTube IFrame deck to CORS-filtered audio when a filter is chosen
-        if (d.mode === 'youtube' && d.track?.source === 'youtube' && d.track.youtubeId) {
-          if (filterId === 'none') {
-            setDeckVolume(idx, d.currentVolume);
-            continue;
-          }
-
-          const track = d.track;
-          const videoId = track.youtubeId;
-          if (!videoId) continue;
-          const trackId = track.id;
-          const initialPos = d.ytPlayer?.getCurrentTime() || currentTimeRef.current || 0;
-          const wasPlaying = isPlayingRef.current;
-          const deckVol = d.currentVolume;
-
-          // Synchronously unlock d.audio inside the user tap so .play() succeeds after async fetch
-          if (wasPlaying) {
-            try {
-              d.audio.removeAttribute('crossorigin');
-              d.audio.src = SILENT_WAV_DATA_URI;
-              d.audio.volume = 0;
-              await d.audio.play();
-              d.audio.pause();
-            } catch {
-              // ignore if browser blocks silent unlock
-            }
-          }
-
-          if (activeDeckRef.current === idx) {
-            setIsBuffering(true);
-            setFilterStatusNote('Buscando flujo de audio filtrable para YouTube...');
-          }
-
-          const resolved = await resolveYouTubeAudioStream(videoId);
-          // Re-validate state after async network resolution
-          if (
-            d.track?.id !== trackId ||
-            d.mode !== 'youtube' ||
-            (audioFilterRef.current as AudioFilterId) === 'none'
-          ) {
-            if (activeDeckRef.current === idx) {
-              setIsBuffering(false);
-            }
-            return;
-          }
-
-          if (!resolved) {
-            if (activeDeckRef.current === idx) {
-              setIsBuffering(false);
-              setFilterStatusNote(
-                'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
-              );
-            }
-            setDeckVolume(idx, deckVol);
-            return;
-          }
-
-          if (resolved.duration && !d.reportedFullDuration) {
-            d.reportedFullDuration = resolved.duration;
-            if (activeDeckRef.current === idx) {
-              setDuration(resolved.duration);
-              durationRef.current = resolved.duration;
-            }
-          }
-
-          const audio = d.audio;
-          audio.onplaying = null;
-          audio.onwaiting = null;
-          audio.oncanplay = null;
-          audio.onended = null;
-          audio.onerror = null;
-          audio.onloadedmetadata = null;
-
+        const livePos = d.ytPlayer?.getCurrentTime() || initialPos;
+        if (livePos > 0.2) {
           try {
-            audio.crossOrigin = 'anonymous';
-            audio.src = resolved.url;
-            audio.volume = Math.max(0, Math.min(1, deckVol));
-            audio.loop = loopModeRef.current === 'track';
-            audio.load();
-
-            await new Promise<void>((resolve, reject) => {
-              let settled = false;
-              const finish = (err?: Error) => {
-                if (settled) return;
-                settled = true;
-                window.clearTimeout(t);
-                audio.removeEventListener('canplay', onReady);
-                audio.removeEventListener('loadedmetadata', onReady);
-                audio.removeEventListener('error', onErr);
-                if (err) reject(err);
-                else resolve();
-              };
-              const t = window.setTimeout(() => finish(new Error('timeout')), 9000);
-              const onReady = () => finish();
-              const onErr = () => finish(new Error('stream error'));
-              audio.addEventListener('canplay', onReady);
-              audio.addEventListener('loadedmetadata', onReady);
-              audio.addEventListener('error', onErr);
-            });
-
-            if (
-              d.track?.id !== trackId ||
-              d.mode !== 'youtube' ||
-              (audioFilterRef.current as AudioFilterId) === 'none'
-            ) {
-              if (activeDeckRef.current === idx) setIsBuffering(false);
-              return;
-            }
-
-            const livePos = d.ytPlayer?.getCurrentTime() || initialPos;
-            if (livePos > 0.2) {
-              try {
-                audio.currentTime = livePos;
-              } catch {
-                // ignore
-              }
-            }
-
-            routeElementWithFilterIfNeeded(audio, resolved.url);
-            audioFilterEngine.applyPreset(audioFilterRef.current);
-
-            if (wasPlaying) {
-              await audio.play();
-            }
-
-            // Only stop YouTube IFrame once the filtered audio stream has cleanly taken over
-            clearDeckYTTimers(d);
-            if (d.ytPlayer) {
-              try {
-                d.ytPlayer.stopVideo();
-              } catch {
-                // ignore
-              }
-            }
-
-            d.mode = 'audio';
-            d.activeAudioSrc = resolved.url;
-            attachAudioElementListeners(idx, audio, false);
-            if (activeDeckRef.current === idx) {
-              setActiveDeckMode('audio');
-              setIsBuffering(false);
-              setFilterStatusNote(null);
-            }
-          } catch (err) {
-            const name = err instanceof Error ? err.name : '';
-            if (name === 'NotAllowedError') {
-              // Stream is valid and loaded; ask user to tap Play to resume filtered audio
-              clearDeckYTTimers(d);
-              if (d.ytPlayer) {
-                try {
-                  d.ytPlayer.stopVideo();
-                } catch {
-                  // ignore
-                }
-              }
-              d.mode = 'audio';
-              d.activeAudioSrc = resolved.url;
-              attachAudioElementListeners(idx, audio, false);
-              if (activeDeckRef.current === idx) {
-                setActiveDeckMode('audio');
-                isPlayingRef.current = false;
-                setIsPlaying(false);
-                setIsBuffering(false);
-                setPendingResumeTime(initialPos);
-                setFilterStatusNote('Pulsa Reproducir para escuchar el vídeo con el filtro.');
-              }
-              return;
-            }
-
-            invalidateYouTubeAudioStream(videoId);
-            audio.pause();
-            audio.removeAttribute('src');
-            audio.load();
-            if (activeDeckRef.current === idx) {
-              setIsBuffering(false);
-              setFilterStatusNote(
-                'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
-              );
-            }
-            setDeckVolume(idx, deckVol);
+            audio.currentTime = livePos;
+          } catch {
+            // ignore
           }
         }
+
+        routeElementWithFilterIfNeeded(audio, resolved.url, true);
+        audioFilterEngine.applyEqualizer(equalizerRef.current);
+        audioFilterEngine.applyPreset(audioFilterRef.current, filterIntensityRef.current);
+
+        if (wasPlaying) {
+          await audio.play();
+        }
+
+        clearDeckYTTimers(d);
+        if (d.ytPlayer) {
+          try {
+            d.ytPlayer.stopVideo();
+          } catch {
+            // ignore
+          }
+        }
+
+        d.mode = 'audio';
+        d.activeAudioSrc = resolved.url;
+        attachAudioElementListeners(idx, audio, false);
+        if (activeDeckRef.current === idx) {
+          setActiveDeckMode('audio');
+          setIsBuffering(false);
+          setFilterStatusNote(null);
+        }
+      } catch (err) {
+        const name = err instanceof Error ? err.name : '';
+        if (name === 'NotAllowedError') {
+          clearDeckYTTimers(d);
+          if (d.ytPlayer) {
+            try {
+              d.ytPlayer.stopVideo();
+            } catch {
+              // ignore
+            }
+          }
+          d.mode = 'audio';
+          d.activeAudioSrc = resolved.url;
+          attachAudioElementListeners(idx, audio, false);
+          if (activeDeckRef.current === idx) {
+            setActiveDeckMode('audio');
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            setIsBuffering(false);
+            setPendingResumeTime(initialPos);
+            setFilterStatusNote('Pulsa Reproducir para escuchar el audio con el ecualizador.');
+          }
+          return;
+        }
+
+        invalidateYouTubeAudioStream(videoId);
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+        if (activeDeckRef.current === idx) {
+          setIsBuffering(false);
+          setFilterStatusNote(
+            'YouTube bloqueó el flujo directo en este vídeo (el reproductor estándar solo ajusta volumen).'
+          );
+        }
+        setDeckVolume(idx, deckVol);
       }
     },
     [
@@ -1416,6 +1525,127 @@ export function useDualDeckPlayer() {
       setDeckVolume,
     ]
   );
+
+  const setAudioFilter = useCallback(
+    async (filterId: AudioFilterId) => {
+      audioFilterRef.current = filterId;
+      setAudioFilterState(filterId);
+      const eqActive = filterId !== 'none' || hasCustomEq(equalizerRef.current);
+      if (eqActive) {
+        audioFilterEngine.resume();
+      }
+      audioFilterEngine.applyPreset(filterId, filterIntensityRef.current);
+      if (filterId === 'none' && !hasCustomEq(equalizerRef.current)) {
+        setFilterStatusNote(null);
+      }
+
+      const decks = decksRef.current;
+      if (!decks) return;
+
+      for (const idx of [0, 1] as const) {
+        const d = decks[idx];
+        if (d.mode === 'audio' && d.track) {
+          // Instant 0ms local filter update on any audio deck (including server-streamed YouTube!)
+          if (eqActive) {
+            routeElementWithFilterIfNeeded(d.audio, d.activeAudioSrc || d.track.url);
+            if (d.fullAudio) {
+              routeElementWithFilterIfNeeded(d.fullAudio, d.activeAudioSrc || d.track.url);
+            }
+          }
+          continue;
+        }
+
+        if (d.mode === 'youtube' && d.track?.source === 'youtube' && d.track.youtubeId) {
+          if (!eqActive) {
+            setDeckVolume(idx, d.currentVolume);
+            continue;
+          }
+          upgradeYoutubeDeckToLocalAudio(idx);
+        }
+      }
+    },
+    [routeElementWithFilterIfNeeded, setDeckVolume, upgradeYoutubeDeckToLocalAudio]
+  );
+
+  const setFilterIntensity = useCallback(
+    (nextIntensity: number) => {
+      const clamped = clampFilterIntensity(nextIntensity);
+      filterIntensityRef.current = clamped;
+      setFilterIntensityState(clamped);
+      if (audioFilterRef.current !== 'none') {
+        audioFilterEngine.resume();
+      }
+      audioFilterEngine.applyFilterIntensity(clamped);
+
+      const decks = decksRef.current;
+      if (!decks) return;
+      for (const idx of [0, 1] as const) {
+        const d = decks[idx];
+        if (d.mode === 'youtube') {
+          setDeckVolume(idx, d.currentVolume);
+        }
+      }
+    },
+    [setDeckVolume]
+  );
+
+  const setEqualizer = useCallback(
+    (next: EqualizerBands) => {
+      const normalized: EqualizerBands = {
+        bassDb: clampEqVal(next.bassDb),
+        midDb: clampEqVal(next.midDb),
+        trebleDb: clampEqVal(next.trebleDb),
+      };
+      equalizerRef.current = normalized;
+      setEqualizerState(normalized);
+      const eqActive = audioFilterRef.current !== 'none' || hasCustomEq(normalized);
+      if (eqActive) {
+        audioFilterEngine.resume();
+      }
+      audioFilterEngine.applyEqualizer(normalized);
+
+      const decks = decksRef.current;
+      if (!decks) return;
+
+      for (const idx of [0, 1] as const) {
+        const d = decks[idx];
+        if (d.mode === 'audio' && d.track && eqActive) {
+          routeElementWithFilterIfNeeded(d.audio, d.activeAudioSrc || d.track.url);
+          if (d.fullAudio) {
+            routeElementWithFilterIfNeeded(d.fullAudio, d.activeAudioSrc || d.track.url);
+          }
+        } else if (d.mode === 'youtube' && d.track?.source === 'youtube' && eqActive) {
+          upgradeYoutubeDeckToLocalAudio(idx);
+        }
+      }
+    },
+    [routeElementWithFilterIfNeeded, upgradeYoutubeDeckToLocalAudio]
+  );
+
+  const resetEqualizer = useCallback(() => {
+    setEqualizer({ ...DEFAULT_EQ_BANDS });
+  }, [setEqualizer]);
+
+  const startYtAuth = useCallback(async () => {
+    setYtAuthBusy(true);
+    try {
+      const status = await startYouTubeDeviceAuth();
+      setYtAuthStatus(status);
+    } finally {
+      setYtAuthBusy(false);
+    }
+  }, []);
+
+  const logoutYtAuth = useCallback(async () => {
+    setYtAuthBusy(true);
+    try {
+      await logoutYouTubeAuth();
+      const status = await getYouTubeAuthStatus();
+      setYtAuthStatus(status);
+    } finally {
+      setYtAuthBusy(false);
+    }
+  }, []);
 
   const startAndAwaitDeckLoaded = useCallback(
     async (
@@ -1454,8 +1684,13 @@ export function useDualDeckPlayer() {
       setFilterStatusNote(null);
 
       if (track.source === 'youtube' && track.youtubeId) {
-        // When an acoustic filter is active, resolve CORS-proxied YouTube audio so Web Audio filters work seamlessly
-        if (audioFilterRef.current !== 'none') {
+        const hasBackend = await checkBackendAvailable();
+        const needsFilterOrEq =
+          audioFilterRef.current !== 'none' || hasCustomEq(equalizerRef.current);
+
+        // Always prefer local same-origin audio stream when backend is running OR when any filter/EQ is active,
+        // so the local equalizer works instantaneously with 0 reloads!
+        if (hasBackend || needsFilterOrEq) {
           audioFilterEngine.resume();
           try {
             deck.audio.removeAttribute('crossorigin');
@@ -1470,12 +1705,18 @@ export function useDualDeckPlayer() {
             return;
           }
 
+          // Check cached intro blob for instant 0ms YouTube playback when backend is running
+          const introSec = introCacheSecRef.current;
+          const cachedIntro =
+            hasBackend && introSec > 0 ? getCachedIntroSync(track.id, introSec) : null;
+
           const resolved = await resolveYouTubeAudioStream(track.youtubeId);
           if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
             return;
           }
 
-          if (resolved) {
+          if (resolved && resolved.url) {
+            setYtLoginSuggested(false);
             if (resolved.duration && !deck.reportedFullDuration) {
               deck.reportedFullDuration = resolved.duration;
               if (activeDeckRef.current === deckIdx) {
@@ -1483,6 +1724,76 @@ export function useDualDeckPlayer() {
                 durationRef.current = resolved.duration;
               }
             }
+
+            // Instant 0ms start from cached intro while /api/youtube/stream preloads in background
+            if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.5)) {
+              deck.mode = 'audio';
+              deck.activeAudioSrc = resolved.url;
+              if (activeDeckRef.current === deckIdx) {
+                setActiveDeckMode('audio');
+              }
+
+              const blobUrl = URL.createObjectURL(cachedIntro.blob);
+              deck.introBlobUrl = blobUrl;
+              deck.usingCachedIntro = true;
+              deck.introCachedDuration = cachedIntro.cachedDuration;
+              deck.pendingHandoff = false;
+              deck.handoffInFlight = false;
+
+              const introAudio = deck.audio;
+              introAudio.removeAttribute('crossorigin');
+              introAudio.src = blobUrl;
+              introAudio.volume = Math.max(0, Math.min(1, initialVolume));
+              introAudio.loop = false;
+
+              if (startSeconds > 0) {
+                const applySeek = () => {
+                  try {
+                    introAudio.currentTime = startSeconds;
+                  } catch {
+                    // ignore
+                  }
+                  introAudio.removeEventListener('loadedmetadata', applySeek);
+                };
+                introAudio.addEventListener('loadedmetadata', applySeek);
+              }
+
+              attachAudioElementListeners(deckIdx, introAudio, true);
+              routeElementWithFilterIfNeeded(introAudio, resolved.url, true);
+
+              const fullAudio = new Audio();
+              fullAudio.preload = 'auto';
+              fullAudio.crossOrigin = 'anonymous';
+              fullAudio.loop = loopModeRef.current === 'track';
+              fullAudio.onloadedmetadata = () => {
+                if (Number.isFinite(fullAudio.duration) && fullAudio.duration > 0) {
+                  deck.reportedFullDuration = fullAudio.duration;
+                  if (activeDeckRef.current === deckIdx) {
+                    setDuration(fullAudio.duration);
+                    durationRef.current = fullAudio.duration;
+                  }
+                }
+              };
+              fullAudio.oncanplay = () => {
+                if (deck.pendingHandoff) {
+                  promoteFullAudioRef.current(deckIdx);
+                }
+              };
+              fullAudio.src = resolved.url;
+              fullAudio.load();
+              deck.fullAudio = fullAudio;
+
+              if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+                return;
+              }
+              await introAudio.play();
+              return;
+            }
+
+            if (hasBackend && introSec > 0) {
+              cacheTrackIntro(track, introSec);
+            }
+
             try {
               await playResolvedAudioUrlOnDeck(
                 deckIdx,
@@ -1497,19 +1808,27 @@ export function useDualDeckPlayer() {
               return;
             } catch {
               invalidateYouTubeAudioStream(track.youtubeId);
-              // Clear failed audio attempt before falling back to official YouTube IFrame
               deck.audio.pause();
               deck.audio.removeAttribute('src');
               deck.audio.load();
               deck.activeAudioSrc = '';
-              setFilterStatusNote(
-                'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
-              );
+              if (needsFilterOrEq) {
+                setFilterStatusNote(
+                  'YouTube bloqueó el flujo directo en este vídeo (el reproductor estándar solo ajusta volumen).'
+                );
+              }
             }
           } else {
-            setFilterStatusNote(
-              'YouTube bloquea los filtros avanzados en este vídeo (solo se ajusta el volumen). En «Música libre» funcionan todos.'
-            );
+            if (resolved?.requiresLogin) {
+              setYtLoginSuggested(true);
+            }
+            if (needsFilterOrEq) {
+              setFilterStatusNote(
+                resolved?.requiresLogin
+                  ? 'YouTube pide vincular cuenta en este vídeo para ecualizarlo (puedes seguir escuchándolo en modo estándar).'
+                  : 'YouTube bloqueó el flujo directo en este vídeo (el reproductor estándar solo ajusta volumen).'
+              );
+            }
           }
         }
 
@@ -1524,6 +1843,24 @@ export function useDualDeckPlayer() {
         return;
       }
 
+      if (track.source === 'local' || isLocalMediaUrl(track.url)) {
+        const playableUrl = await resolveLocalMediaUrl(track.url);
+        if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+          return;
+        }
+        await playResolvedAudioUrlOnDeck(
+          deckIdx,
+          track,
+          playableUrl,
+          initialVolume,
+          waitForPlaybackStart,
+          startSeconds,
+          expectedSessionId,
+          true
+        );
+        return;
+      }
+
       deck.mode = 'audio';
       deck.activeAudioSrc = track.url;
       if (activeDeckRef.current === deckIdx) {
@@ -1533,7 +1870,10 @@ export function useDualDeckPlayer() {
         track.source === 'audius' ||
         track.url.includes('archive.org') ||
         track.url.includes('wikimedia.org');
-      const shouldSetCors = supportsCorsNaturally || audioFilterRef.current !== 'none';
+      const shouldSetCors =
+        supportsCorsNaturally ||
+        audioFilterRef.current !== 'none' ||
+        hasCustomEq(equalizerRef.current);
 
       // Check if we have a cached X-second intro in IndexedDB/memory for instant 0ms start!
       const introSec = introCacheSecRef.current;
@@ -1567,7 +1907,7 @@ export function useDualDeckPlayer() {
         }
 
         attachAudioElementListeners(deckIdx, introAudio, true);
-        routeElementWithFilterIfNeeded(introAudio, track.url);
+        routeElementWithFilterIfNeeded(introAudio, track.url, supportsCorsNaturally);
 
         // Simultaneously preload the full remote song in the background
         const fullAudio = new Audio();
@@ -1797,9 +2137,7 @@ export function useDualDeckPlayer() {
         decks[outgoingIdx].ownerSessionId = sessionId;
         activeDeckRef.current = outgoingIdx;
         setActiveDeckIndex(outgoingIdx);
-        setActiveDeckMode(
-          track.source === 'youtube' && audioFilterRef.current === 'none' ? 'youtube' : 'audio'
-        );
+        setActiveDeckMode('audio');
         setCurrentTrack(track);
         currentTrackRef.current = track;
         const startAt = options?.startSeconds || 0;
@@ -2122,15 +2460,17 @@ export function useDualDeckPlayer() {
         }
       }
 
-      setCurrentTime(pos);
-      currentTimeRef.current = pos;
-      if (dur > 0) {
+      if (Math.abs(pos - currentTimeRef.current) >= 0.25) {
+        setCurrentTime(pos);
+        currentTimeRef.current = pos;
+      }
+      if (dur > 0 && Math.abs(dur - durationRef.current) >= 0.5) {
         setDuration(dur);
         durationRef.current = dur;
       }
 
       tickCount += 1;
-      if (tickCount % 4 === 0 && isPlayingRef.current) {
+      if (tickCount % 20 === 0 && isPlayingRef.current) {
         saveSnapshot(true);
       }
 
@@ -2157,13 +2497,22 @@ export function useDualDeckPlayer() {
     return () => window.clearInterval(timer);
   }, [getNextTrack, nextTrack, saveSnapshot]);
 
-  // Flush snapshot right before page unloads/reloads
+  // Flush snapshot right before page unloads/reloads or hides on Android
   useEffect(() => {
     const onPageHide = () => {
       saveSnapshot();
     };
+    const onVisSave = () => {
+      if (document.visibilityState === 'hidden') {
+        saveSnapshot();
+      }
+    };
     window.addEventListener('pagehide', onPageHide);
-    return () => window.removeEventListener('pagehide', onPageHide);
+    document.addEventListener('visibilitychange', onVisSave);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('visibilitychange', onVisSave);
+    };
   }, [saveSnapshot]);
 
   useEffect(() => {
@@ -2248,6 +2597,20 @@ export function useDualDeckPlayer() {
     };
   }, [cancelCrossfade, stopDeck]);
 
+  const switchActiveYoutubeToIframe = useCallback(async () => {
+    const idx = activeDeckRef.current;
+    const deck = decksRef.current?.[idx];
+    if (!deck || deck.track?.source !== 'youtube' || !deck.track.youtubeId) return;
+    if (deck.mode === 'youtube') return;
+
+    const pos = deck.audio.currentTime || currentTimeRef.current || 0;
+    const vol = deck.currentVolume || masterVolumeRef.current;
+    const savedTrack = deck.track;
+
+    clearDeckIntroArtifacts(deck);
+    await fallbackYouTubeToIframeRef.current(idx, savedTrack, pos, vol);
+  }, [clearDeckIntroArtifacts]);
+
   return {
     currentTrack,
     queue,
@@ -2269,6 +2632,17 @@ export function useDualDeckPlayer() {
     setIntroCacheSeconds,
     audioFilter,
     setAudioFilter,
+    filterIntensity,
+    setFilterIntensity,
+    equalizer,
+    setEqualizer,
+    resetEqualizer,
+    ytAuthStatus,
+    ytLoginSuggested,
+    ytAuthBusy,
+    startYtAuth,
+    logoutYtAuth,
+    switchActiveYoutubeToIframe,
     warmTracks,
     crossfadeStatus,
     masterVolume,

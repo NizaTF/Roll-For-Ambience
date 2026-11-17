@@ -15,7 +15,7 @@ export const PWAInstallButton: React.FC = () => {
       <button
         type="button"
         onClick={install}
-        className="inline-flex items-center gap-2 min-h-[40px] px-3.5 py-2 rounded-xl bg-[#D99B38] text-[#0D0E11] text-xs font-semibold hover:bg-[#F2BE63] active:scale-[0.98] transition whitespace-nowrap shrink-0"
+        className="inline-flex items-center gap-2 min-h-[40px] px-3.5 py-2 rounded-xl bg-accent text-accent-contrast text-xs font-semibold hover:bg-accent-light active:scale-[0.98] transition whitespace-nowrap shrink-0"
       >
         <Download className="w-4 h-4" />
         <span>Instalar app</span>
@@ -28,9 +28,9 @@ export const PWAInstallButton: React.FC = () => {
       <button
         type="button"
         onClick={() => setShowGuide(true)}
-        className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-xl border border-white/10 bg-[#16181D] text-[#D6D2C8] text-xs font-medium hover:bg-[#1E2128] active:scale-[0.98] transition whitespace-nowrap shrink-0"
+        className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-xl border border-white/10 bg-surface text-[#D6D2C8] text-xs font-medium hover:bg-elevated active:scale-[0.98] transition whitespace-nowrap shrink-0"
       >
-        <Smartphone className="w-4 h-4 text-[#D99B38]" />
+        <Smartphone className="w-4 h-4 text-accent" />
         <span>Instalar</span>
       </button>
 
@@ -40,7 +40,7 @@ export const PWAInstallButton: React.FC = () => {
           onClick={() => setShowGuide(false)}
         >
           <div
-            className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#16181D] p-5 shadow-2xl"
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-surface p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3">
@@ -70,7 +70,7 @@ export const PWAInstallButton: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowGuide(false)}
-              className="mt-5 w-full min-h-[44px] rounded-xl bg-[#D99B38] text-[#0D0E11] text-sm font-semibold hover:bg-[#F2BE63] transition"
+              className="mt-5 w-full min-h-[44px] rounded-xl bg-accent text-accent-contrast text-sm font-semibold hover:bg-accent-light transition"
             >
               Entendido
             </button>

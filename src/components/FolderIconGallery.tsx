@@ -44,7 +44,7 @@ export const FolderIconGallery: React.FC<FolderIconGalleryProps> = ({
       {/* Header row with current selection + search */}
       <div className="flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 text-xs text-[#C7C2B6] min-w-0">
-          <span className="w-7 h-7 rounded-lg bg-[#D99B38]/15 border border-[#D99B38]/40 text-[#F2BE63] flex items-center justify-center shrink-0">
+          <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/40 text-accent-light flex items-center justify-center shrink-0">
             <FolderIcon name={value} className="w-4 h-4" />
           </span>
           <span className="truncate">
@@ -64,7 +64,7 @@ export const FolderIconGallery: React.FC<FolderIconGalleryProps> = ({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Buscar icono (desierto, iglesia, monstruo, bosque...)"
-          className="w-full min-h-[40px] pl-8.5 pr-8 rounded-xl bg-[#0D0E11] border border-white/10 text-xs text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-[#D99B38]"
+          className="w-full min-h-[40px] pl-8.5 pr-8 rounded-xl bg-canvas border border-white/10 text-xs text-[#F2F0EB] placeholder:text-[#78746C] focus:outline-none focus:border-accent"
         />
         {query && (
           <button
@@ -89,8 +89,8 @@ export const FolderIconGallery: React.FC<FolderIconGalleryProps> = ({
               onClick={() => setCategory(cat.id)}
               className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-medium whitespace-nowrap shrink-0 border transition ${
                 active
-                  ? 'bg-[#D99B38] text-[#0D0E11] border-[#D99B38] font-semibold'
-                  : 'bg-[#0D0E11] text-[#B8B3A8] border-white/8 hover:border-white/20 hover:text-[#F2F0EB]'
+                  ? 'bg-accent text-accent-contrast border-accent font-semibold'
+                  : 'bg-canvas text-[#B8B3A8] border-white/8 hover:border-white/20 hover:text-[#F2F0EB]'
               }`}
             >
               {cat.label}
@@ -120,8 +120,8 @@ export const FolderIconGallery: React.FC<FolderIconGalleryProps> = ({
                 title={opt.label}
                 className={`min-h-[58px] px-1.5 py-2 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition ${
                   selected
-                    ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63] shadow-[0_0_0_1px_rgba(217,155,56,0.3)]'
-                    : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128] hover:border-white/15'
+                    ? 'border-accent bg-accent/15 text-accent-light'
+                    : 'border-white/8 bg-elevated/60 text-[#C7C2B6] hover:bg-elevated hover:border-white/15'
                 }`}
               >
                 <FolderIcon name={opt.value} className="w-5 h-5" />

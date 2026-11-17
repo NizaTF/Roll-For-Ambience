@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ChevronDown,
+  ExternalLink,
   FolderPlus,
   Loader2,
   Pause,
@@ -12,14 +13,15 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  SlidersHorizontal,
   Sun,
   Video,
   Volume2,
   Waves,
 } from 'lucide-react';
 import { AUDIO_FILTER_PRESETS } from '../services/audioFilters';
-import { formatDuration } from '../services/freeMusicApi';
-import { AudioFilterId, CrossfadeStatus, LoopMode, Track } from '../types/audio';
+import { formatDuration, YouTubeAuthStatus } from '../services/freeMusicApi';
+import { AudioFilterId, CrossfadeStatus, EqualizerBands, LoopMode, Track } from '../types/audio';
 
 interface PlayerDeckProps {
   currentTrack: Track | null;
@@ -35,6 +37,16 @@ interface PlayerDeckProps {
   onChangeIntroCache: (sec: number) => void;
   audioFilter: AudioFilterId;
   onChangeAudioFilter: (filterId: AudioFilterId) => void;
+  filterIntensity: number;
+  onChangeFilterIntensity: (intensity: number) => void;
+  equalizer: EqualizerBands;
+  onChangeEqualizer: (bands: EqualizerBands) => void;
+  onResetEqualizer: () => void;
+  ytAuthStatus?: YouTubeAuthStatus;
+  ytLoginSuggested?: boolean;
+  ytAuthBusy?: boolean;
+  onStartYtAuth?: () => void;
+  onLogoutYtAuth?: () => void;
   activeDeckMode?: 'idle' | 'audio' | 'youtube';
   filterStatusNote?: string | null;
   crossfadeStatus: CrossfadeStatus;
@@ -74,6 +86,16 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   onChangeIntroCache,
   audioFilter,
   onChangeAudioFilter,
+  filterIntensity,
+  onChangeFilterIntensity,
+  equalizer,
+  onChangeEqualizer,
+  onResetEqualizer,
+  ytAuthStatus,
+  ytLoginSuggested = false,
+  ytAuthBusy = false,
+  onStartYtAuth,
+  onLogoutYtAuth,
   activeDeckMode = 'idle',
   filterStatusNote = null,
   crossfadeStatus,
@@ -95,8 +117,11 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   onOpenFolderPicker,
   onCloseSheet,
 }) => {
+  const [eqOpen, setEqOpen] = useState(false);
   const safeDuration = duration > 0 ? duration : 0;
   const progressPct = safeDuration > 0 ? Math.min(100, (currentTime / safeDuration) * 100) : 0;
+  const eqModified =
+    equalizer.bassDb !== 0 || equalizer.midDb !== 0 || equalizer.trebleDb !== 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -121,7 +146,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
 
       {/* Track Title & Source */}
       <div className="flex items-center gap-3.5">
-        <div className="w-14 h-14 rounded-2xl border border-white/10 bg-[#1E2128] flex items-center justify-center shrink-0 overflow-hidden">
+        <div className="w-14 h-14 rounded-2xl border border-white/10 bg-elevated flex items-center justify-center shrink-0 overflow-hidden">
           {currentTrack?.artworkUrl ? (
             <img
               src={currentTrack.artworkUrl}
@@ -132,7 +157,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           ) : (
             <Waves
               className={`w-6 h-6 ${
-                isPlaying ? 'text-[#F2BE63]' : 'text-[#8C887E]'
+                isPlaying ? 'text-accent-light' : 'text-[#8C887E]'
               }`}
             />
           )}
@@ -149,6 +174,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
                     ? 'YouTube'
                     : currentTrack.source === 'audius'
                     ? 'Audius'
+                    : currentTrack.source === 'local'
+                    ? 'Archivo local'
                     : 'Audio libre'
                 }`
               : 'Selecciona una canción de tus carpetas'}
@@ -162,7 +189,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
               onClick={() => onOpenFolderPicker(currentTrack)}
               aria-label="Guardar o cambiar carpetas de esta canción"
               title="Guardar en una o varias carpetas"
-              className="min-w-[40px] min-h-[40px] rounded-xl border border-white/10 bg-[#1E2128] text-[#C7C2B6] hover:border-[#D99B38]/60 hover:text-[#F2BE63] flex items-center justify-center transition"
+              className="min-w-[40px] min-h-[40px] rounded-xl border border-white/10 bg-elevated text-[#C7C2B6] hover:border-accent/60 hover:text-accent-light flex items-center justify-center transition"
             >
               <FolderPlus className="w-4 h-4" />
             </button>
@@ -174,8 +201,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
               onClick={onToggleYoutubeFrame}
               className={`min-h-[40px] px-2.5 rounded-xl border text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition ${
                 showYoutubeFrame
-                  ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-                  : 'border-white/10 bg-[#1E2128] text-[#C7C2B6]'
+                  ? 'border-accent bg-accent/15 text-accent-light'
+                  : 'border-white/10 bg-elevated text-[#C7C2B6]'
               }`}
             >
               <Video className="w-3.5 h-3.5" />
@@ -187,8 +214,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
 
       {/* Active crossfade indicator */}
       {crossfadeStatus.active && (
-        <div className="rounded-xl border border-[#D99B38]/40 bg-[#D99B38]/10 px-3 py-2 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-[#F2BE63]">
+        <div className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-accent-light">
             <span className="truncate">
               {crossfadeStatus.phase === 'loading'
                 ? `Cargando "${crossfadeStatus.toTitle || 'siguiente'}" para fundir...`
@@ -205,7 +232,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           {crossfadeStatus.phase !== 'loading' && (
             <div className="h-1 rounded-full bg-white/10 overflow-hidden">
               <div
-                className="h-full bg-[#F2BE63] transition-all duration-75"
+                className="h-full bg-accent-light transition-all duration-75"
                 style={{ width: `${Math.round(crossfadeStatus.progress * 100)}%` }}
               />
             </div>
@@ -238,7 +265,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           aria-label="Posición de reproducción"
           className="audio-slider w-full h-6 disabled:opacity-40"
           style={{
-            background: `linear-gradient(to right, #D99B38 ${progressPct}%, rgba(255,255,255,0.12) ${progressPct}%)`,
+            background: `linear-gradient(to right, var(--rfa-accent) ${progressPct}%, rgba(255,255,255,0.12) ${progressPct}%)`,
             borderRadius: '9999px',
             height: '6px',
           }}
@@ -276,7 +303,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           type="button"
           onClick={onTogglePlay}
           aria-label={isPlaying ? 'Pausar' : 'Reproducir'}
-          className="w-16 h-16 rounded-2xl bg-[#D99B38] text-[#0D0E11] flex items-center justify-center shadow-lg hover:bg-[#F2BE63] active:scale-[0.97] transition shrink-0"
+          className="w-16 h-16 rounded-2xl bg-accent text-accent-contrast flex items-center justify-center shadow-lg hover:bg-accent-light active:scale-[0.97] transition shrink-0"
         >
           {isBuffering ? (
             <Loader2 className="w-6 h-6 animate-spin" />
@@ -316,8 +343,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           onClick={onToggleShuffle}
           className={`min-h-[44px] px-2.5 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 transition ${
             shuffle
-              ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-              : 'border-white/8 bg-[#1E2128]/70 text-[#C7C2B6]'
+              ? 'border-accent bg-accent/15 text-accent-light'
+              : 'border-white/8 bg-elevated/70 text-[#C7C2B6]'
           }`}
         >
           <Shuffle className="w-3.5 h-3.5" />
@@ -329,8 +356,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           onClick={onCycleLoopMode}
           className={`min-h-[44px] px-2.5 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 transition ${
             loopMode !== 'none'
-              ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-              : 'border-white/8 bg-[#1E2128]/70 text-[#C7C2B6]'
+              ? 'border-accent bg-accent/15 text-accent-light'
+              : 'border-white/8 bg-elevated/70 text-[#C7C2B6]'
           }`}
         >
           {loopMode === 'track' ? (
@@ -353,8 +380,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           title="Evita que se apague la pantalla durante la sesión"
           className={`min-h-[44px] px-2.5 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 transition ${
             keepScreenAwake
-              ? 'border-[#D99B38] bg-[#D99B38]/15 text-[#F2BE63]'
-              : 'border-white/8 bg-[#1E2128]/70 text-[#C7C2B6]'
+              ? 'border-accent bg-accent/15 text-accent-light'
+              : 'border-white/8 bg-elevated/70 text-[#C7C2B6]'
           }`}
         >
           <Sun className="w-3.5 h-3.5" />
@@ -366,7 +393,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
       <div className="pt-2 border-t border-white/8 space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-[#C7C2B6] font-medium">Fundido entre canciones</span>
-          <span className="font-mono-tabular text-[#F2BE63]">
+          <span className="font-mono-tabular text-accent-light">
             {crossfadeSeconds === 0 ? 'Desactivado' : `${crossfadeSeconds}s`}
           </span>
         </div>
@@ -378,8 +405,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
               onClick={() => onChangeCrossfade(sec)}
               className={`min-h-[40px] rounded-lg text-xs font-mono-tabular border transition ${
                 crossfadeSeconds === sec
-                  ? 'border-[#D99B38] bg-[#D99B38] text-[#0D0E11] font-semibold'
-                  : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
+                  ? 'border-accent bg-accent text-accent-contrast font-semibold'
+                  : 'border-white/8 bg-elevated/60 text-[#C7C2B6] hover:bg-elevated'
               }`}
             >
               {sec === 0 ? 'Off' : `${sec}s`}
@@ -392,7 +419,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
       <div className="pt-2 border-t border-white/8 space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-[#C7C2B6] font-medium">Inicio instantáneo (precarga)</span>
-          <span className="font-mono-tabular text-[#F2BE63]">
+          <span className="font-mono-tabular text-accent-light">
             {introCacheSeconds === 0 ? 'Desactivado' : `${introCacheSeconds}s`}
           </span>
         </div>
@@ -404,8 +431,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
               onClick={() => onChangeIntroCache(sec)}
               className={`min-h-[40px] rounded-lg text-xs font-mono-tabular border transition ${
                 introCacheSeconds === sec
-                  ? 'border-[#D99B38] bg-[#D99B38] text-[#0D0E11] font-semibold'
-                  : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128]'
+                  ? 'border-accent bg-accent text-accent-contrast font-semibold'
+                  : 'border-white/8 bg-elevated/60 text-[#C7C2B6] hover:bg-elevated'
               }`}
             >
               {sec === 0 ? 'Off' : `${sec}s`}
@@ -414,13 +441,27 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
         </div>
       </div>
 
-      {/* Acoustic Environment Filters */}
-      <div className="pt-2 border-t border-white/8 space-y-2">
+      {/* Acoustic Environment Filters & Fast Local Equalizer */}
+      <div className="pt-2 border-t border-white/8 space-y-2.5">
         <div className="flex items-center justify-between gap-2 text-xs">
           <span className="text-[#C7C2B6] font-medium">Ambiente acústico (filtros)</span>
-          <span className="text-[#F2BE63] truncate">
-            {AUDIO_FILTER_PRESETS.find((f) => f.id === audioFilter)?.label || 'Normal'}
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-accent-light truncate">
+              {AUDIO_FILTER_PRESETS.find((f) => f.id === audioFilter)?.label || 'Normal'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setEqOpen((v) => !v)}
+              className={`min-h-[30px] px-2 rounded-lg border text-[11px] font-medium inline-flex items-center gap-1 transition ${
+                eqOpen || eqModified
+                  ? 'border-accent/60 bg-accent/15 text-accent-light'
+                  : 'border-white/10 bg-elevated/70 text-[#C7C2B6] hover:text-[#F2F0EB]'
+              }`}
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              <span>EQ{eqModified ? ' •' : ''}</span>
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-1.5">
           {AUDIO_FILTER_PRESETS.map((preset) => {
@@ -433,8 +474,8 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
                 onClick={() => onChangeAudioFilter(preset.id)}
                 className={`min-h-[40px] px-2 py-1.5 rounded-lg text-[11px] font-medium border transition truncate ${
                   active
-                    ? 'border-[#D99B38] bg-[#D99B38] text-[#0D0E11] font-semibold'
-                    : 'border-white/8 bg-[#1E2128]/60 text-[#C7C2B6] hover:bg-[#1E2128] hover:text-[#F2F0EB]'
+                    ? 'border-accent bg-accent text-accent-contrast font-semibold'
+                    : 'border-white/8 bg-elevated/60 text-[#C7C2B6] hover:bg-elevated hover:text-[#F2F0EB]'
                 }`}
               >
                 {preset.label}
@@ -442,18 +483,153 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
             );
           })}
         </div>
+
+        {/* Acoustic filter strength slider */}
+        <div className="rounded-xl border border-white/8 bg-canvas/45 px-3 py-2 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-[#C7C2B6] font-medium">Fuerza del filtro acústico</span>
+            <span className="font-mono-tabular text-accent-light">
+              {Math.round(filterIntensity * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(filterIntensity * 100)}
+            onChange={(e) => onChangeFilterIntensity(Number(e.target.value) / 100)}
+            aria-label="Fuerza del filtro acústico"
+            className={`audio-slider w-full h-5 ${audioFilter === 'none' ? 'opacity-65' : ''}`}
+            style={{
+              background: `linear-gradient(to right, var(--rfa-accent) ${
+                Math.round(filterIntensity * 100)
+              }%, rgba(255,255,255,0.12) ${Math.round(filterIntensity * 100)}%)`,
+              borderRadius: '9999px',
+              height: '6px',
+            }}
+          />
+        </div>
+
+        {/* Fast Local 3-Band Equalizer */}
+        {eqOpen && (
+          <div className="rounded-xl border border-white/10 bg-canvas/60 p-3 space-y-2.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-[#C7C2B6] font-medium">
+                Ecualizador local rápido
+              </span>
+              {eqModified && (
+                <button
+                  type="button"
+                  onClick={onResetEqualizer}
+                  className="text-accent-light hover:underline font-medium"
+                >
+                  Restablecer
+                </button>
+              )}
+            </div>
+            {(
+              [
+                { key: 'bassDb', label: 'Graves', val: equalizer.bassDb },
+                { key: 'midDb', label: 'Medios', val: equalizer.midDb },
+                { key: 'trebleDb', label: 'Agudos', val: equalizer.trebleDb },
+              ] as const
+            ).map((band) => (
+              <div key={band.key} className="flex items-center gap-2.5">
+                <span className="w-14 text-[11px] text-[#9C988E] shrink-0">
+                  {band.label}
+                </span>
+                <input
+                  type="range"
+                  min={-12}
+                  max={12}
+                  step={1}
+                  value={band.val}
+                  aria-label={`Ecualizador ${band.label}`}
+                  onChange={(e) =>
+                    onChangeEqualizer({
+                      ...equalizer,
+                      [band.key]: Number(e.target.value),
+                    })
+                  }
+                  className="audio-slider w-full h-5"
+                />
+                <span className="w-11 text-right text-[11px] font-mono-tabular text-[#D6D2C8] shrink-0">
+                  {band.val > 0 ? `+${band.val}` : band.val} dB
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {filterStatusNote ? (
           <p className="text-[11px] text-amber-300/90 leading-snug">
             {filterStatusNote}
           </p>
         ) : (
-          audioFilter !== 'none' &&
+          (audioFilter !== 'none' || eqModified) &&
           currentTrack?.source === 'youtube' &&
           activeDeckMode === 'audio' && (
-            <p className="text-[11px] text-[#F2BE63]/90 leading-snug">
-              Filtro acústico aplicado al audio de YouTube en tiempo real.
+            <p className="text-[11px] text-accent-light/90 leading-snug">
+              Ecualizador local aplicado al instante sobre YouTube.
             </p>
           )
+        )}
+
+        {ytAuthStatus?.available &&
+          !ytAuthStatus.authenticated &&
+          (ytLoginSuggested || Boolean(ytAuthStatus.pending)) &&
+          onStartYtAuth && (
+            <div className="rounded-xl border border-accent/35 bg-accent/10 p-2.5 text-xs space-y-2">
+              {ytAuthStatus.pending ? (
+                <>
+                  <p className="text-[#F2F0EB]">
+                    Abre{' '}
+                    <a
+                      href={ytAuthStatus.pending.verificationUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent-light underline inline-flex items-center gap-1"
+                    >
+                      {ytAuthStatus.pending.verificationUrl}
+                      <ExternalLink className="w-3 h-3" />
+                    </a>{' '}
+                    e introduce el código:
+                  </p>
+                  <div className="font-mono-tabular text-base font-bold tracking-widest text-accent-light">
+                    {ytAuthStatus.pending.userCode}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-[#D6D2C8]">
+                    Este vídeo pide verificación en YouTube para ecualizarse.
+                  </span>
+                  <button
+                    type="button"
+                    disabled={ytAuthBusy}
+                    onClick={onStartYtAuth}
+                    className="shrink-0 min-h-[34px] px-2.5 rounded-lg bg-accent text-accent-contrast text-[11px] font-semibold hover:bg-accent-light disabled:opacity-50"
+                  >
+                    {ytAuthBusy ? 'Conectando...' : 'Vincular YouTube'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+        {ytAuthStatus?.available && ytAuthStatus.authenticated && onLogoutYtAuth && (
+          <div className="flex items-center justify-between text-[11px] text-[#9C988E]">
+            <span>YouTube vinculado</span>
+            <button
+              type="button"
+              disabled={ytAuthBusy}
+              onClick={onLogoutYtAuth}
+              className="hover:text-[#F2F0EB] underline"
+            >
+              Desvincular
+            </button>
+          </div>
         )}
       </div>
 
@@ -470,7 +646,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
           aria-label="Volumen maestro de música"
           className="audio-slider w-full h-6"
           style={{
-            background: `linear-gradient(to right, #D99B38 ${
+            background: `linear-gradient(to right, var(--rfa-accent) ${
               masterVolume * 100
             }%, rgba(255,255,255,0.12) ${masterVolume * 100}%)`,
             borderRadius: '9999px',

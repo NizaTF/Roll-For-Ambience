@@ -1,4 +1,4 @@
-export type AudioSourceType = 'audius' | 'youtube' | 'direct';
+export type AudioSourceType = 'audius' | 'youtube' | 'direct' | 'local';
 
 export type FolderIconName =
   // Legacy & Core
@@ -132,6 +132,12 @@ export type AudioFilterId =
   | 'cathedral'
   | 'dream_ethereal';
 
+export interface EqualizerBands {
+  bassDb: number;
+  midDb: number;
+  trebleDb: number;
+}
+
 export interface CrossfadeStatus {
   active: boolean;
   phase?: 'loading' | 'fading';
@@ -148,4 +154,45 @@ export interface WikimediaSfxResult {
   duration?: number;
   mime: string;
   sourceLabel?: string;
+}
+
+export type AppFontId =
+  | 'classic'
+  | 'fantasy'
+  | 'chronicle'
+  | 'modern'
+  | 'arcane'
+  | 'system';
+
+export type AppBgPresetId =
+  | 'obsidian'
+  | 'abyss'
+  | 'forest'
+  | 'crimson'
+  | 'grimoire'
+  | 'oled'
+  | 'custom';
+
+export type AppAccentPresetId =
+  | 'amber'
+  | 'crimson'
+  | 'emerald'
+  | 'sapphire'
+  | 'violet'
+  | 'silver'
+  | 'custom';
+
+export type AppTextScale = 'compact' | 'normal' | 'large';
+export type AppCardRadius = 'sharp' | 'balanced' | 'soft';
+
+export interface AppAppearanceSettings {
+  fontId: AppFontId;
+  textScale: AppTextScale;
+  bgPreset: AppBgPresetId;
+  customBgColor: string;
+  bgAtmosphere: boolean;
+  accentPreset: AppAccentPresetId;
+  customAccentColor: string;
+  cardRadius: AppCardRadius;
+  reduceMotion: boolean;
 }

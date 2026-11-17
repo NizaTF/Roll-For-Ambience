@@ -1,10 +1,16 @@
-import { AudioFilterId } from '../types/audio';
+import { AudioFilterId, EqualizerBands } from '../types/audio';
 
 export interface AudioFilterPreset {
   id: AudioFilterId;
   label: string;
   description: string;
 }
+
+export const DEFAULT_EQ_BANDS: EqualizerBands = {
+  bassDb: 0,
+  midDb: 0,
+  trebleDb: 0,
+};
 
 export const AUDIO_FILTER_PRESETS: AudioFilterPreset[] = [
   { id: 'none', label: 'Normal', description: 'Sonido limpio original' },
@@ -174,6 +180,15 @@ const PRESET_PARAMS: Record<AudioFilterId, FilterParams> = {
   },
 };
 
+function isConstrainedAndroidDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent.toLowerCase();
+  const isAndroid = ua.includes('android');
+  const cores = navigator.hardwareConcurrency || 8;
+  const mem = (navigator as unknown as { deviceMemory?: number }).deviceMemory || 8;
+  return (isAndroid && (cores <= 4 || mem <= 4)) || cores <= 2 || mem <= 2;
+}
+
 function createImpulseResponse(
   ctx: AudioContext,
   durationSec: number,
@@ -201,6 +216,9 @@ function createImpulseResponse(
 class AudioFilterEngine {
   private ctx: AudioContext | null = null;
   private inputBus: GainNode | null = null;
+  private eqBass: BiquadFilterNode | null = null;
+  private eqMid: BiquadFilterNode | null = null;
+  private eqTreble: BiquadFilterNode | null = null;
   private highpass: BiquadFilterNode | null = null;
   private lowpass: BiquadFilterNode | null = null;
   private lowShelf: BiquadFilterNode | null = null;
@@ -217,6 +235,9 @@ class AudioFilterEngine {
   private attachedSources = new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>();
   private impulseCache = new Map<string, AudioBuffer>();
   private currentPreset: AudioFilterId = 'none';
+  private currentFilterIntensity = 1;
+  private currentEq: EqualizerBands = { ...DEFAULT_EQ_BANDS };
+  private shouldKeepActive = false;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -226,10 +247,29 @@ class AudioFilterEngine {
     if (!Ctor) return null;
 
     if (!this.ctx) {
-      const ctx = new Ctor();
+      const ctx = new Ctor({ latencyHint: 'playback' });
       this.ctx = ctx;
 
+      ctx.onstatechange = () => {
+        if (this.shouldKeepActive && ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+      };
+
       const inputBus = ctx.createGain();
+      const eqBass = ctx.createBiquadFilter();
+      eqBass.type = 'lowshelf';
+      eqBass.frequency.value = 120;
+
+      const eqMid = ctx.createBiquadFilter();
+      eqMid.type = 'peaking';
+      eqMid.frequency.value = 1000;
+      eqMid.Q.value = 0.85;
+
+      const eqTreble = ctx.createBiquadFilter();
+      eqTreble.type = 'highshelf';
+      eqTreble.frequency.value = 4500;
+
       const highpass = ctx.createBiquadFilter();
       highpass.type = 'highpass';
       const lowpass = ctx.createBiquadFilter();
@@ -260,8 +300,11 @@ class AudioFilterEngine {
       lfoGain.connect(lowpass.frequency);
       lfo.start();
 
-      // Main EQ chain
-      inputBus.connect(highpass);
+      // Local 3-band EQ -> Acoustic preset filters
+      inputBus.connect(eqBass);
+      eqBass.connect(eqMid);
+      eqMid.connect(eqTreble);
+      eqTreble.connect(highpass);
       highpass.connect(lowShelf);
       lowShelf.connect(lowpass);
 
@@ -285,6 +328,9 @@ class AudioFilterEngine {
       compressor.connect(ctx.destination);
 
       this.inputBus = inputBus;
+      this.eqBass = eqBass;
+      this.eqMid = eqMid;
+      this.eqTreble = eqTreble;
       this.highpass = highpass;
       this.lowpass = lowpass;
       this.lowShelf = lowShelf;
@@ -299,7 +345,8 @@ class AudioFilterEngine {
       this.lfoGain = lfoGain;
       this.compressor = compressor;
 
-      this.applyPreset(this.currentPreset);
+      this.applyEqualizer(this.currentEq);
+      this.applyPreset(this.currentPreset, this.currentFilterIntensity);
     }
 
     if (this.ctx.state === 'suspended') {
@@ -307,6 +354,13 @@ class AudioFilterEngine {
     }
 
     return this.ctx;
+  }
+
+  public setPlaybackActive(active: boolean): void {
+    this.shouldKeepActive = active;
+    if (active && this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
   }
 
   public resume(): void {
@@ -338,8 +392,42 @@ class AudioFilterEngine {
     }
   }
 
-  public applyPreset(presetId: AudioFilterId): void {
+  public applyEqualizer(bands: EqualizerBands): void {
+    const clampDb = (v: number) => Math.max(-12, Math.min(12, v));
+    this.currentEq = {
+      bassDb: clampDb(bands.bassDb),
+      midDb: clampDb(bands.midDb),
+      trebleDb: clampDb(bands.trebleDb),
+    };
+
+    const ctx = this.ctx;
+    if (!ctx || !this.eqBass || !this.eqMid || !this.eqTreble) {
+      return;
+    }
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    const now = ctx.currentTime;
+    const ramp = 0.03;
+    this.eqBass.gain.setTargetAtTime(this.currentEq.bassDb, now, ramp);
+    this.eqMid.gain.setTargetAtTime(this.currentEq.midDb, now, ramp);
+    this.eqTreble.gain.setTargetAtTime(this.currentEq.trebleDb, now, ramp);
+  }
+
+  public applyFilterIntensity(intensity: number): void {
+    const clamped = Math.max(0, Math.min(1, Number.isFinite(intensity) ? intensity : 1));
+    this.currentFilterIntensity = clamped;
+    this.applyPreset(this.currentPreset, clamped);
+  }
+
+  public applyPreset(presetId: AudioFilterId, intensityOverride?: number): void {
     this.currentPreset = presetId;
+    if (typeof intensityOverride === 'number' && Number.isFinite(intensityOverride)) {
+      this.currentFilterIntensity = Math.max(0, Math.min(1, intensityOverride));
+    }
+
     const ctx = this.ctx;
     if (
       !ctx ||
@@ -363,25 +451,46 @@ class AudioFilterEngine {
       ctx.resume().catch(() => {});
     }
 
-    const p = PRESET_PARAMS[presetId] || PRESET_PARAMS.none;
+    const base = PRESET_PARAMS.none;
+    const target = PRESET_PARAMS[presetId] || base;
+    const s = presetId === 'none' ? 0 : this.currentFilterIntensity;
+
+    const lerp = (a: number, b: number) => a + (b - a) * s;
+    const lerpLog = (a: number, b: number) => a * Math.pow(b / a, s);
+
+    const lowpassFreq = lerpLog(base.lowpassFreq, target.lowpassFreq);
+    const lowpassQ = lerp(base.lowpassQ, target.lowpassQ);
+    const highpassFreq = lerpLog(base.highpassFreq, target.highpassFreq);
+    const highpassQ = lerp(base.highpassQ, target.highpassQ);
+    const shelfGainDb = lerp(base.shelfGainDb, target.shelfGainDb);
+    const dryGainVal = lerp(base.dryGain, target.dryGain);
+    const reverbMix = lerp(base.reverbMix, target.reverbMix);
+    const delayFeedback = lerp(base.delayFeedback, target.delayFeedback);
+    const delayMix = lerp(base.delayMix, target.delayMix);
+    const lfoDepthHz = lerp(base.lfoDepthHz, target.lfoDepthHz);
+
     const now = ctx.currentTime;
-    const ramp = 0.06;
+    const ramp = 0.04;
 
-    this.lowpass.frequency.setTargetAtTime(p.lowpassFreq, now, ramp);
-    this.lowpass.Q.setTargetAtTime(p.lowpassQ, now, ramp);
-    this.highpass.frequency.setTargetAtTime(p.highpassFreq, now, ramp);
-    this.highpass.Q.setTargetAtTime(p.highpassQ, now, ramp);
-    this.lowShelf.frequency.setTargetAtTime(p.shelfFreq, now, ramp);
-    this.lowShelf.gain.setTargetAtTime(p.shelfGainDb, now, ramp);
+    this.lowpass.frequency.setTargetAtTime(lowpassFreq, now, ramp);
+    this.lowpass.Q.setTargetAtTime(lowpassQ, now, ramp);
+    this.highpass.frequency.setTargetAtTime(highpassFreq, now, ramp);
+    this.highpass.Q.setTargetAtTime(highpassQ, now, ramp);
+    this.lowShelf.frequency.setTargetAtTime(target.shelfFreq, now, ramp);
+    this.lowShelf.gain.setTargetAtTime(shelfGainDb, now, ramp);
 
-    this.dryGain.gain.setTargetAtTime(p.dryGain, now, ramp);
-    this.wetReverbGain.gain.setTargetAtTime(p.reverbMix, now, ramp);
+    this.dryGain.gain.setTargetAtTime(dryGainVal, now, ramp);
+    this.wetReverbGain.gain.setTargetAtTime(reverbMix, now, ramp);
 
-    if (p.reverbMix > 0) {
-      const irKey = `${p.reverbDecaySec.toFixed(1)}`;
+    if (reverbMix > 0.005) {
+      const lowCpu = isConstrainedAndroidDevice();
+      const effectiveDecay = lowCpu
+        ? Math.min(target.reverbDecaySec, 1.7)
+        : target.reverbDecaySec;
+      const irKey = `${effectiveDecay.toFixed(1)}`;
       let buf = this.impulseCache.get(irKey);
       if (!buf) {
-        buf = createImpulseResponse(ctx, p.reverbDecaySec, 2.6);
+        buf = createImpulseResponse(ctx, effectiveDecay, 2.6);
         this.impulseCache.set(irKey, buf);
       }
       if (this.convolver.buffer !== buf) {
@@ -389,13 +498,13 @@ class AudioFilterEngine {
       }
     }
 
-    this.delayNode.delayTime.setTargetAtTime(p.delayTimeSec, now, ramp);
-    this.delayFeedback.gain.setTargetAtTime(p.delayFeedback, now, ramp);
-    this.delayDamp.frequency.setTargetAtTime(p.delayDampFreq, now, ramp);
-    this.wetDelayGain.gain.setTargetAtTime(p.delayMix, now, ramp);
+    this.delayNode.delayTime.setTargetAtTime(target.delayTimeSec, now, ramp);
+    this.delayFeedback.gain.setTargetAtTime(delayFeedback, now, ramp);
+    this.delayDamp.frequency.setTargetAtTime(target.delayDampFreq, now, ramp);
+    this.wetDelayGain.gain.setTargetAtTime(delayMix, now, ramp);
 
-    this.lfo.frequency.setTargetAtTime(p.lfoRateHz, now, ramp);
-    this.lfoGain.gain.setTargetAtTime(p.lfoDepthHz, now, ramp);
+    this.lfo.frequency.setTargetAtTime(target.lfoRateHz, now, ramp);
+    this.lfoGain.gain.setTargetAtTime(lfoDepthHz, now, ramp);
   }
 }
 

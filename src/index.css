@@ -1,24 +1,58 @@
 @import "tailwindcss";
 
+@theme inline {
+  --color-accent: var(--rfa-accent);
+  --color-accent-light: var(--rfa-accent-light);
+  --color-accent-contrast: var(--rfa-accent-contrast);
+  --color-canvas: var(--rfa-bg);
+  --color-surface: var(--rfa-surface);
+  --color-elevated: var(--rfa-elevated);
+}
+
 @layer base {
   :root {
     --font-display: 'Fraunces', Georgia, serif;
     --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --rfa-bg: #0D0E11;
+    --rfa-surface: #16181D;
+    --rfa-elevated: #1E2128;
+    --rfa-accent: #D99B38;
+    --rfa-accent-light: #F2BE63;
+    --rfa-accent-contrast: #0D0E11;
+    --rfa-card-radius: 1rem;
   }
 
   html {
     font-family: var(--font-sans);
-    background-color: #0D0E11;
+    background-color: var(--rfa-bg);
     color: #F2F0EB;
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior-y: none;
   }
 
   body {
+    background-color: var(--rfa-bg);
     overscroll-behavior-y: none;
     min-height: 100dvh;
   }
+}
+
+html.rfa-atmosphere body {
+  background-image: radial-gradient(
+    ellipse 80% 42% at 50% -10%,
+    color-mix(in srgb, var(--rfa-accent) 14%, transparent),
+    transparent 70%
+  );
+  background-attachment: fixed;
+}
+
+html[data-card-radius="sharp"] .rounded-2xl {
+  border-radius: 0.625rem;
+}
+
+html[data-card-radius="soft"] .rounded-2xl {
+  border-radius: 1.5rem;
 }
 
 .font-display {
@@ -54,8 +88,8 @@ input[type="range"].audio-slider::-webkit-slider-thumb {
   width: 18px;
   height: 18px;
   border-radius: 9999px;
-  background: #F2BE63;
-  border: 2px solid #0D0E11;
+  background: var(--rfa-accent-light);
+  border: 2px solid var(--rfa-bg);
   margin-top: -6px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
   transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -69,9 +103,17 @@ input[type="range"].audio-slider::-moz-range-thumb {
   width: 18px;
   height: 18px;
   border-radius: 9999px;
-  background: #F2BE63;
-  border: 2px solid #0D0E11;
+  background: var(--rfa-accent-light);
+  border: 2px solid var(--rfa-bg);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+html.rfa-reduce-motion *,
+html.rfa-reduce-motion *::before,
+html.rfa-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

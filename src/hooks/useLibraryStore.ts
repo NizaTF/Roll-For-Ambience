@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STARTER_FOLDERS, STARTER_TRACKS } from '../data/starterLibrary';
+import { deleteLocalMedia, isLocalMediaUrl } from '../services/localMedia';
 import {
   loadIndexedDBJSON,
   loadLocalStorageJSON,
@@ -218,8 +219,17 @@ export function useLibraryStore() {
   const removeTrackFromFolder = useCallback((trackId: string, folderId: string) => {
     setLibrary((prev) => {
       if (folderId === 'all') {
+        const removedTrack = prev.tracks[trackId];
         const nextTracks = { ...prev.tracks };
         delete nextTracks[trackId];
+        if (removedTrack && isLocalMediaUrl(removedTrack.url)) {
+          const stillUsed = Object.values(nextTracks).some(
+            (t) => t.url === removedTrack.url
+          );
+          if (!stillUsed) {
+            deleteLocalMedia(removedTrack.url);
+          }
+        }
         return {
           tracks: nextTracks,
           folders: prev.folders.map((f) => ({
