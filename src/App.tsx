@@ -14,7 +14,18 @@ import { useLibraryStore } from './hooks/useLibraryStore';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSoundboard } from './hooks/useSoundboard';
 import { formatDuration } from './services/freeMusicApi';
-import { isLocalMediaUrl } from './services/localMedia';
+import {
+  formatBytes,
+  getAllLocalMediaRecords,
+  isLocalMediaUrl,
+  makeLocalMediaUrl,
+  saveRawLocalMediaRecords,
+} from './services/localMedia';
+import {
+  buildRfaArchiveBlob,
+  downloadArchiveBlob,
+  parseRfaArchiveFile,
+} from './services/rfaArchive';
 import {
   notifyServiceWorkerPlaybackState,
   warmSoundboardInServiceWorker,
@@ -185,6 +196,89 @@ export default function App() {
     player.playTrack(track, { queue, queueName });
   };
 
+  const handleExportFullArchive = async (): Promise<{ ok: boolean; message: string }> => {
+    try {
+      const allLocalRecords = await getAllLocalMediaRecords();
+      const referencedUrls = new Set<string>();
+      for (const track of Object.values(library.tracksById)) {
+        if (isLocalMediaUrl(track.url)) referencedUrls.add(track.url);
+      }
+      for (const pad of soundboard.pads) {
+        if (isLocalMediaUrl(pad.url)) referencedUrls.add(pad.url);
+      }
+      const mediaRecords = allLocalRecords.filter((rec) =>
+        referencedUrls.has(makeLocalMediaUrl(rec.id))
+      );
+
+      const { blob, filename, summary } = buildRfaArchiveBlob({
+        library: {
+          tracks: library.tracksById,
+          folders: library.folders,
+          selectedFolderId: library.selectedFolderId,
+        },
+        soundboard: soundboard.pads,
+        appearance: appearance.settings,
+        playerPrefs: player.getPrefsSnapshot(),
+        mediaRecords,
+      });
+
+      downloadArchiveBlob(blob, filename);
+      return {
+        ok: true,
+        message: `Pack .rfa exportado (${summary.folderCount} carpetas, ${summary.trackCount} pistas, ${summary.soundCount} sonidos, ${summary.mediaCount} audios locales · ${formatBytes(summary.totalBytes)})`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        message:
+          err instanceof Error ? err.message : 'No se pudo generar el archivo .rfa',
+      };
+    }
+  };
+
+  const handleImportArchiveFile = async (
+    file: File
+  ): Promise<{ ok: boolean; message: string }> => {
+    try {
+      const parsed = await parseRfaArchiveFile(file);
+      if (parsed.kind === 'archive') {
+        if (parsed.mediaRecords.length > 0) {
+          await saveRawLocalMediaRecords(parsed.mediaRecords);
+        }
+
+        const { manifest } = parsed;
+        library.replaceLibrarySnapshot(manifest.library);
+        soundboard.replacePads(manifest.soundboard);
+        if (manifest.appearance) {
+          appearance.replaceAppearance(manifest.appearance);
+        }
+        if (manifest.playerPrefs) {
+          player.applyPrefsSnapshot(manifest.playerPrefs);
+        }
+
+        const importedTracks = Object.values(manifest.library.tracks);
+        if (importedTracks.length > 0) {
+          player.warmTracks(importedTracks);
+        }
+
+        return {
+          ok: true,
+          message: `Pack .rfa restaurado: ${manifest.library.folders.length} carpetas, ${importedTracks.length} pistas, ${manifest.soundboard.length} sonidos y ${parsed.mediaRecords.length} audios locales.`,
+        };
+      }
+
+      return library.importListOrBackup(parsed.jsonText);
+    } catch (err) {
+      return {
+        ok: false,
+        message:
+          err instanceof Error
+            ? err.message
+            : 'No se pudo importar el archivo seleccionado.',
+      };
+    }
+  };
+
   const showYtOverlay =
     showYoutubeFrame && player.currentTrack?.source === 'youtube';
 
@@ -321,7 +415,8 @@ export default function App() {
                 onMoveTrack={library.moveTrackInFolder}
                 onExportPlaylist={library.exportPlaylist}
                 onExportBackup={library.exportBackup}
-                onImportListOrBackup={library.importListOrBackup}
+                onExportFullArchive={handleExportFullArchive}
+                onImportArchiveFile={handleImportArchiveFile}
                 onResetStarter={library.resetToStarter}
                 onGoToSearch={() => setActiveTab('search')}
               />
@@ -369,6 +464,8 @@ export default function App() {
                 settings={appearance.settings}
                 onUpdate={appearance.updateSettings}
                 onReset={appearance.resetAppearance}
+                onExportFullArchive={handleExportFullArchive}
+                onImportArchiveFile={handleImportArchiveFile}
               />
             )}
           </section>

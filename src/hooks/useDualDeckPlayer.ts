@@ -18,6 +18,7 @@ import {
 } from '../services/introCache';
 import { getLocalMediaUrlSync, isLocalMediaUrl, resolveLocalMediaUrl } from '../services/localMedia';
 import { requestAndroidPersistentStorage } from '../services/persistence';
+import { RfaPlayerPrefsSnapshot } from '../services/rfaArchive';
 import { AudioFilterId, CrossfadeStatus, EqualizerBands, LoopMode, Track } from '../types/audio';
 
 interface YTPlayer {
@@ -2723,6 +2724,61 @@ export function useDualDeckPlayer() {
     await fallbackYouTubeToIframeRef.current(idx, savedTrack, pos, vol);
   }, [clearDeckIntroArtifacts]);
 
+  const getPrefsSnapshot = useCallback((): RfaPlayerPrefsSnapshot => {
+    return {
+      crossfadeSeconds: crossfadeSecRef.current,
+      introCacheSeconds: introCacheSecRef.current,
+      audioFilter: audioFilterRef.current,
+      filterIntensity: filterIntensityRef.current,
+      equalizer: { ...equalizerRef.current },
+      masterVolume: masterVolumeRef.current,
+      loopMode: loopModeRef.current,
+      shuffle: shuffleRef.current,
+    };
+  }, []);
+
+  const applyPrefsSnapshot = useCallback(
+    (next: Partial<RfaPlayerPrefsSnapshot>) => {
+      if (typeof next.crossfadeSeconds === 'number') {
+        const cf = Math.max(0, Math.min(12, next.crossfadeSeconds));
+        setCrossfadeSeconds(cf);
+        crossfadeSecRef.current = cf;
+      }
+      if (typeof next.introCacheSeconds === 'number') {
+        const ic = Math.max(5, Math.min(15, Math.round(next.introCacheSeconds)));
+        setIntroCacheSeconds(ic);
+        introCacheSecRef.current = ic;
+      }
+      if (typeof next.masterVolume === 'number') {
+        const mv = Math.max(0, Math.min(1, next.masterVolume));
+        setMasterVolume(mv);
+        masterVolumeRef.current = mv;
+      }
+      if (
+        next.loopMode === 'none' ||
+        next.loopMode === 'folder' ||
+        next.loopMode === 'track'
+      ) {
+        setLoopMode(next.loopMode);
+        loopModeRef.current = next.loopMode;
+      }
+      if (typeof next.shuffle === 'boolean') {
+        setShuffle(next.shuffle);
+        shuffleRef.current = next.shuffle;
+      }
+      if (typeof next.filterIntensity === 'number') {
+        setFilterIntensity(next.filterIntensity);
+      }
+      if (next.equalizer) {
+        setEqualizer(next.equalizer);
+      }
+      if (typeof next.audioFilter === 'string') {
+        setAudioFilter(next.audioFilter);
+      }
+    },
+    [setAudioFilter, setEqualizer, setFilterIntensity]
+  );
+
   return {
     currentTrack,
     queue,
@@ -2756,6 +2812,8 @@ export function useDualDeckPlayer() {
     logoutYtAuth,
     switchActiveYoutubeToIframe,
     warmTracks,
+    getPrefsSnapshot,
+    applyPrefsSnapshot,
     crossfadeStatus,
     masterVolume,
     setMasterVolume,

@@ -387,6 +387,30 @@ export function useLibraryStore() {
     setSelectedFolderId(STARTER_FOLDERS[0].id);
   }, []);
 
+  const replaceLibrarySnapshot = useCallback(
+    (next: {
+      tracks: Record<string, Track>;
+      folders: Folder[];
+      selectedFolderId?: string;
+    }) => {
+      const validFolders = Array.isArray(next.folders) ? next.folders : [];
+      setLibrary({
+        tracks: next.tracks || {},
+        folders: validFolders,
+      });
+      const targetId = next.selectedFolderId;
+      if (
+        targetId === 'all' ||
+        (targetId && validFolders.some((f) => f.id === targetId))
+      ) {
+        setSelectedFolderId(targetId);
+      } else {
+        setSelectedFolderId(validFolders[0]?.id || 'all');
+      }
+    },
+    []
+  );
+
   return {
     folders: library.folders,
     tracksById: library.tracks,
@@ -412,5 +436,6 @@ export function useLibraryStore() {
     importListOrBackup,
     importBackup,
     resetToStarter,
+    replaceLibrarySnapshot,
   };
 }

@@ -261,3 +261,54 @@ export async function getLocalMediaStats(): Promise<{
     }
   });
 }
+
+export async function getAllLocalMediaRecords(): Promise<StoredLocalMediaRecord[]> {
+  const db = await openAppDB();
+  if (!db) return [];
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(LOCAL_MEDIA_STORE, 'readonly');
+      const req = tx.objectStore(LOCAL_MEDIA_STORE).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as StoredLocalMediaRecord[] | undefined) || [];
+        resolve(items.filter((item) => item && item.id && item.blob instanceof Blob));
+      };
+      req.onerror = () => resolve([]);
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+export async function saveRawLocalMediaRecords(
+  records: StoredLocalMediaRecord[]
+): Promise<void> {
+  if (records.length === 0) return;
+  const db = await openAppDB();
+  if (!db) {
+    throw new Error('Tu navegador no permite restaurar archivos locales en IndexedDB.');
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(LOCAL_MEDIA_STORE, 'readwrite');
+    const store = tx.objectStore(LOCAL_MEDIA_STORE);
+    for (const rec of records) {
+      store.put(rec);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () =>
+      reject(new Error('No se pudieron guardar los archivos de audio importados.'));
+  });
+
+  for (const rec of records) {
+    const mediaUrl = makeLocalMediaUrl(rec.id);
+    if (!objectUrlMemoryCache.has(mediaUrl)) {
+      try {
+        objectUrlMemoryCache.set(mediaUrl, URL.createObjectURL(rec.blob));
+      } catch {
+        // ignore object url allocation failures
+      }
+    }
+  }
+}

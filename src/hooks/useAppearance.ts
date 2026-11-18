@@ -54,9 +54,14 @@ export function useAppearance() {
     setSettings({ ...DEFAULT_APPEARANCE });
   }, []);
 
+  const replaceAppearance = useCallback((next: Partial<AppAppearanceSettings>) => {
+    setSettings(sanitizeAppearanceSettings(next));
+  }, []);
+
   return {
     settings,
     updateSettings,
     resetAppearance,
+    replaceAppearance,
   };
 }

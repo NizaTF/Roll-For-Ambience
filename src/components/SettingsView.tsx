@@ -1,14 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Check,
   Coffee,
+  Download,
   ExternalLink,
   Github,
   HardDrive,
+  Loader2,
+  Package,
   Palette,
   RotateCcw,
   Sliders,
   Type,
+  Upload,
   Zap,
 } from 'lucide-react';
 import {
@@ -28,6 +32,8 @@ interface SettingsViewProps {
   settings: AppAppearanceSettings;
   onUpdate: (patch: Partial<AppAppearanceSettings>) => void;
   onReset: () => void;
+  onExportFullArchive: () => Promise<{ ok: boolean; message: string }>;
+  onImportArchiveFile: (file: File) => Promise<{ ok: boolean; message: string }>;
 }
 
 const APP_VERSION = '1.0.0';
@@ -48,6 +54,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   onUpdate,
   onReset,
+  onExportFullArchive,
+  onImportArchiveFile,
 }) => {
   const palette = resolvePalette(settings);
   const [localStats, setLocalStats] = useState<{
@@ -56,6 +64,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     musicCount: number;
     sfxCount: number;
   }>({ count: 0, totalBytes: 0, musicCount: 0, sfxCount: 0 });
+  const [archiveBusy, setArchiveBusy] = useState<'export' | 'import' | null>(null);
+  const [archiveNotice, setArchiveNotice] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
+  const archiveInputRef = useRef<HTMLInputElement | null>(null);
+
+  const refreshLocalStats = useCallback(async () => {
+    const stats = await getLocalMediaStats();
+    setLocalStats(stats);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -66,6 +84,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       mounted = false;
     };
   }, []);
+
+  const handleExportClick = async () => {
+    setArchiveBusy('export');
+    setArchiveNotice(null);
+    const res = await onExportFullArchive();
+    setArchiveBusy(null);
+    setArchiveNotice({ ok: res.ok, text: res.message });
+  };
+
+  const handleImportChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setArchiveBusy('import');
+    setArchiveNotice(null);
+    const res = await onImportArchiveFile(file);
+    setArchiveBusy(null);
+    setArchiveNotice({ ok: res.ok, text: res.message });
+    if (res.ok) {
+      await refreshLocalStats();
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -412,26 +452,93 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </label>
       </section>
 
-      {/* Section 5: Local Audio Storage Summary */}
-      <section className="rounded-2xl border border-white/10 bg-surface p-4 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/35 text-accent-light flex items-center justify-center shrink-0">
-            <HardDrive className="w-5 h-5" />
-          </span>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-[#F2F0EB]">
-              Audios locales guardados
-            </div>
-            <div className="text-xs text-[#9C988E] truncate">
-              {localStats.count === 0
-                ? 'Ningún archivo local importado todavía'
-                : `${localStats.musicCount} canciones · ${localStats.sfxCount} sonidos`}
+      {/* Section 5: Local Audio Storage & Complete .rfa Backup */}
+      <section className="rounded-2xl border border-white/10 bg-surface p-4 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/35 text-accent-light flex items-center justify-center shrink-0">
+              <HardDrive className="w-5 h-5" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-[#F2F0EB]">
+                Audios locales guardados
+              </div>
+              <div className="text-xs text-[#9C988E] truncate">
+                {localStats.count === 0
+                  ? 'Ningún archivo local importado todavía'
+                  : `${localStats.musicCount} canciones · ${localStats.sfxCount} sonidos`}
+              </div>
             </div>
           </div>
+          <span className="text-xs font-mono-tabular text-accent-light shrink-0">
+            {formatBytes(localStats.totalBytes)}
+          </span>
         </div>
-        <span className="text-xs font-mono-tabular text-accent-light shrink-0">
-          {formatBytes(localStats.totalBytes)}
-        </span>
+
+        <div className="pt-3 border-t border-white/8 space-y-3">
+          <div className="flex items-start gap-2.5">
+            <Package className="w-4 h-4 text-accent mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-[#F2F0EB]">
+                Pack completo de campaña (.rfa)
+              </h3>
+              <p className="text-xs text-[#9C988E] mt-0.5 leading-relaxed">
+                Empaqueta en un único archivo todas tus carpetas, canciones, soundboard completo,
+                archivos locales importados, ecualizador y apariencia.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              disabled={archiveBusy !== null}
+              onClick={handleExportClick}
+              className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-accent text-accent-contrast text-xs font-semibold hover:bg-accent-light disabled:opacity-60 inline-flex items-center justify-center gap-2 transition"
+            >
+              {archiveBusy === 'export' ? (
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+              ) : (
+                <Download className="w-4 h-4 shrink-0" />
+              )}
+              <span>Exportar todo (.rfa)</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={archiveBusy !== null}
+              onClick={() => archiveInputRef.current?.click()}
+              className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-white/12 bg-elevated text-xs font-semibold text-[#F2F0EB] hover:border-accent/60 hover:text-accent-light disabled:opacity-60 inline-flex items-center justify-center gap-2 transition"
+            >
+              {archiveBusy === 'import' ? (
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+              ) : (
+                <Upload className="w-4 h-4 shrink-0" />
+              )}
+              <span>Importar pack (.rfa / .json)</span>
+            </button>
+
+            <input
+              ref={archiveInputRef}
+              type="file"
+              accept=".rfa,.json,application/json,application/octet-stream"
+              onChange={handleImportChange}
+              className="hidden"
+            />
+          </div>
+
+          {archiveNotice && (
+            <div
+              className={`rounded-xl border px-3 py-2.5 text-xs ${
+                archiveNotice.ok
+                  ? 'border-accent/40 bg-accent/12 text-accent-light'
+                  : 'border-rose-500/40 bg-rose-500/12 text-rose-200'
+              }`}
+            >
+              {archiveNotice.text}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Section 6: About RFA, Version, Creator & Support Links */}

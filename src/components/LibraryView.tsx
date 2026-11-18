@@ -7,6 +7,7 @@ import {
   FolderPlus,
   MoreVertical,
   Music2,
+  Package,
   Pause,
   Pencil,
   Play,
@@ -44,7 +45,8 @@ interface LibraryViewProps {
   onMoveTrack: (folderId: string, trackId: string, dir: 'up' | 'down') => void;
   onExportPlaylist: (folderId: string) => string;
   onExportBackup: () => string;
-  onImportListOrBackup: (json: string) => { ok: boolean; message: string };
+  onExportFullArchive: () => Promise<{ ok: boolean; message: string }>;
+  onImportArchiveFile: (file: File) => Promise<{ ok: boolean; message: string }>;
   onResetStarter: () => void;
   onGoToSearch: () => void;
 }
@@ -82,7 +84,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onMoveTrack,
   onExportPlaylist,
   onExportBackup,
-  onImportListOrBackup,
+  onExportFullArchive,
+  onImportArchiveFile,
   onResetStarter,
   onGoToSearch,
 }) => {
@@ -171,19 +174,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     showNotice(true, 'Biblioteca completa exportada');
   };
 
-  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDownloadFullArchive = async () => {
+    const res = await onExportFullArchive();
+    showNotice(res.ok, res.message);
+    if (res.ok) {
+      setShowFolderOptions(false);
+    }
+  };
+
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const res = onImportListOrBackup(String(reader.result || ''));
-      showNotice(res.ok, res.message);
-      if (res.ok) {
-        setShowFolderOptions(false);
-      }
-    };
-    reader.readAsText(file);
     e.target.value = '';
+    if (!file) return;
+    const res = await onImportArchiveFile(file);
+    showNotice(res.ok, res.message);
+    if (res.ok) {
+      setShowFolderOptions(false);
+    }
   };
 
   return (
@@ -638,7 +645,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             )}
 
             <div className="space-y-2">
-              <p className="text-xs text-[#9C988E]">Exportar e importar listas (.json)</p>
+              <p className="text-xs text-[#9C988E]">Exportar e importar (.rfa y .json)</p>
+
+              <button
+                type="button"
+                onClick={handleDownloadFullArchive}
+                className="w-full min-h-[46px] px-3.5 rounded-xl bg-accent/15 border border-accent/40 text-sm font-semibold text-accent-light flex items-center gap-3 hover:bg-accent/25"
+              >
+                <Package className="w-4 h-4 shrink-0" />
+                <span>Exportar todo (.rfa: carpetas, soundboard y audios)</span>
+              </button>
 
               <button
                 type="button"
@@ -646,7 +662,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
               >
                 <Share2 className="w-4 h-4 text-accent" />
-                <span>Exportar lista "{queueTitle}"</span>
+                <span>Exportar lista "{queueTitle}" (.json)</span>
               </button>
 
               <button
@@ -655,12 +671,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
               >
                 <Upload className="w-4 h-4 text-accent" />
-                <span>Importar lista o copia de seguridad</span>
+                <span>Importar (.rfa o lista .json)</span>
               </button>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="application/json,.json"
+                accept=".rfa,.json,application/json,application/octet-stream"
                 onChange={handleFileImport}
                 className="hidden"
               />
@@ -671,7 +687,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 className="w-full min-h-[46px] px-3.5 rounded-xl bg-elevated text-sm text-[#F2F0EB] flex items-center gap-3 hover:bg-white/10"
               >
                 <Download className="w-4 h-4 text-accent" />
-                <span>Exportar todas las listas (copia completa)</span>
+                <span>Exportar solo carpetas (.json ligero)</span>
               </button>
             </div>
 

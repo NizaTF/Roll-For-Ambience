@@ -265,6 +265,20 @@ export function useSoundboard() {
     setPads(STARTER_SOUNDBOARD);
   }, [stopAll]);
 
+  const replacePads = useCallback(
+    (nextPads: SoundPad[]) => {
+      stopAll();
+      setPadErrors({});
+      const valid = Array.isArray(nextPads)
+        ? nextPads.filter(
+            (p) => p && typeof p.id === 'string' && typeof p.url === 'string'
+          )
+        : [];
+      setPads(valid);
+    },
+    [stopAll]
+  );
+
   const activeCount = Object.keys(activePadIds).length;
 
   return {
@@ -281,5 +295,6 @@ export function useSoundboard() {
     addPad,
     removePad,
     resetStarterPads,
+    replacePads,
   };
 }
