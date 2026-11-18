@@ -11,11 +11,12 @@ import {
 } from '../services/freeMusicApi';
 import {
   cacheTrackIntro,
+  clearIntroFailureCooldowns,
   getCachedIntroSync,
   hydrateIntroCache,
   warmTracksIntroCache,
 } from '../services/introCache';
-import { isLocalMediaUrl, resolveLocalMediaUrl } from '../services/localMedia';
+import { getLocalMediaUrlSync, isLocalMediaUrl, resolveLocalMediaUrl } from '../services/localMedia';
 import { requestAndroidPersistentStorage } from '../services/persistence';
 import { AudioFilterId, CrossfadeStatus, EqualizerBands, LoopMode, Track } from '../types/audio';
 
@@ -77,6 +78,7 @@ interface DeckInstance {
   reportedFullDuration: number;
   pendingHandoff: boolean;
   handoffInFlight: boolean;
+  pendingYTFallback: boolean;
   ytPlayer: YTPlayer | null;
   ytHost: YTHost;
   ytRetryCount: number;
@@ -157,7 +159,9 @@ function loadPrefs(): PlayerPrefs {
         crossfadeSeconds:
           typeof parsed.crossfadeSeconds === 'number' ? parsed.crossfadeSeconds : 4,
         introCacheSeconds:
-          typeof parsed.introCacheSeconds === 'number' ? parsed.introCacheSeconds : 8,
+          typeof parsed.introCacheSeconds === 'number' && parsed.introCacheSeconds >= 5
+            ? Math.min(15, parsed.introCacheSeconds)
+            : 8,
         audioFilter:
           typeof parsed.audioFilter === 'string' ? (parsed.audioFilter as AudioFilterId) : 'none',
         filterIntensity: clampFilterIntensity(parsed.filterIntensity),
@@ -263,6 +267,7 @@ function createEmptyDeck(): DeckInstance {
     reportedFullDuration: 0,
     pendingHandoff: false,
     handoffInFlight: false,
+    pendingYTFallback: false,
     ytPlayer: null,
     ytHost: 'https://www.youtube.com',
     ytRetryCount: 0,
@@ -475,16 +480,29 @@ export function useDualDeckPlayer() {
   }, [ytAuthStatus.available, ytAuthStatus.authenticated, ytAuthStatus.pending]);
 
   const warmTracks = useCallback((tracks: Track[]) => {
-    if (introCacheSecRef.current <= 0 || tracks.length === 0) return;
-    warmTracksIntroCache(tracks, introCacheSecRef.current, 12);
+    const sec = Math.max(5, introCacheSecRef.current);
+    if (tracks.length === 0) return;
+    warmTracksIntroCache(tracks, sec);
   }, []);
 
   // Automatically warm queue intros when queue or introCacheSeconds changes
   useEffect(() => {
-    if (queue.length > 0 && introCacheSeconds > 0) {
-      warmTracksIntroCache(queue, introCacheSeconds, 12);
+    if (queue.length > 0) {
+      warmTracksIntroCache(queue, Math.max(5, introCacheSeconds));
     }
   }, [queue, introCacheSeconds]);
+
+  // Clear retry cooldowns whenever internet connectivity returns
+  useEffect(() => {
+    const onOnline = () => {
+      clearIntroFailureCooldowns();
+      if (queueRef.current.length > 0) {
+        warmTracksIntroCache(queueRef.current, Math.max(5, introCacheSecRef.current));
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
 
   const saveSnapshot = useCallback((forcePlaying?: boolean) => {
     const track = currentTrackRef.current;
@@ -523,6 +541,7 @@ export function useDualDeckPlayer() {
     deck.introCachedDuration = 0;
     deck.pendingHandoff = false;
     deck.handoffInFlight = false;
+    deck.pendingYTFallback = false;
   }, []);
 
   const clearDeckYTTimers = useCallback((deck: DeckInstance) => {
@@ -692,13 +711,29 @@ export function useDualDeckPlayer() {
       };
       audioEl.onended = () => {
         const deck = decksRef.current?.[deckIdx];
-        if (isIntroChunk && deck && deck.usingCachedIntro && deck.fullAudio) {
-          // Intro cache chunk ended before full stream took over: wait & swap seamlessly
+        if (isIntroChunk && deck && deck.usingCachedIntro) {
+          if (deck.fullAudio) {
+            // Intro cache chunk ended before full stream took over: wait & swap seamlessly
+            deck.pendingHandoff = true;
+            if (activeDeckRef.current === deckIdx) {
+              setIsBuffering(true);
+            }
+            promoteFullAudioRef.current(deckIdx, deck.introCachedDuration);
+            return;
+          }
+          if (deck.pendingYTFallback && deck.track?.source === 'youtube' && deck.track.youtubeId) {
+            const savedTrack = deck.track;
+            const resumeAt = deck.introCachedDuration;
+            const vol = deck.currentVolume;
+            deck.usingCachedIntro = false;
+            fallbackYouTubeToIframeRef.current(deckIdx, savedTrack, resumeAt, vol);
+            return;
+          }
+          // Background stream resolution is still in flight; hand off as soon as it resolves
           deck.pendingHandoff = true;
           if (activeDeckRef.current === deckIdx) {
             setIsBuffering(true);
           }
-          promoteFullAudioRef.current(deckIdx, deck.introCachedDuration);
           return;
         }
         // Guard against unexpected stream truncation early in a long track (never treat 10s cutoff as track end)
@@ -784,7 +819,11 @@ export function useDualDeckPlayer() {
         // Avoid swapping to a truncated/cached response shorter than the real song
         return false;
       }
-      if (full.seekable.length === 0 || full.seekable.end(0) < targetTime + 0.5) {
+      const hasSeekable =
+        full.seekable.length > 0 && full.seekable.end(full.seekable.length - 1) >= targetTime + 0.5;
+      const hasBuffered =
+        full.buffered.length > 0 && full.buffered.end(full.buffered.length - 1) >= targetTime + 0.5;
+      if (!hasSeekable && !hasBuffered) {
         return false;
       }
     }
@@ -845,6 +884,9 @@ export function useDualDeckPlayer() {
       full.volume = deck.audio.volume;
       full.loop = loopModeRef.current === 'track';
 
+      // Route through EQ/filter BEFORE starting playback so transition is glitch-free
+      routeElementWithFilterIfNeeded(full, deck.activeAudioSrc || deck.track?.url);
+
       if (isPlayingRef.current || deck.pendingHandoff || seekOverride !== undefined) {
         await full.play();
       }
@@ -868,11 +910,11 @@ export function useDualDeckPlayer() {
       deck.fullAudio = null;
       deck.usingCachedIntro = false;
       deck.pendingHandoff = false;
+      deck.pendingYTFallback = false;
       if (Number.isFinite(full.duration) && full.duration > 0) {
         deck.reportedFullDuration = full.duration;
       }
       attachAudioElementListeners(deckIdx, full, false);
-      routeElementWithFilterIfNeeded(full, deck.activeAudioSrc || deck.track?.url);
 
       if (activeDeckRef.current === deckIdx) {
         setIsBuffering(false);
@@ -1684,82 +1726,79 @@ export function useDualDeckPlayer() {
       setFilterStatusNote(null);
 
       if (track.source === 'youtube' && track.youtubeId) {
-        const hasBackend = await checkBackendAvailable();
+        const videoId = track.youtubeId;
+        const introSec = Math.max(5, introCacheSecRef.current);
+        const cachedIntro = getCachedIntroSync(track.id, 1);
         const needsFilterOrEq =
           audioFilterRef.current !== 'none' || hasCustomEq(equalizerRef.current);
 
-        // Always prefer local same-origin audio stream when backend is running OR when any filter/EQ is active,
-        // so the local equalizer works instantaneously with 0 reloads!
-        if (hasBackend || needsFilterOrEq) {
+        // FAST PATH: Play cached intro immediately in 0ms WITHOUT waiting for backend health or YouTube API!
+        if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.2)) {
           audioFilterEngine.resume();
-          try {
-            deck.audio.removeAttribute('crossorigin');
-            deck.audio.src = SILENT_WAV_DATA_URI;
-            deck.audio.volume = 0;
-            await deck.audio.play();
-            deck.audio.pause();
-          } catch {
-            // ignore
-          }
-          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
-            return;
+          deck.mode = 'audio';
+          deck.activeAudioSrc = '';
+          if (activeDeckRef.current === deckIdx) {
+            setActiveDeckMode('audio');
           }
 
-          // Check cached intro blob for instant 0ms YouTube playback when backend is running
-          const introSec = introCacheSecRef.current;
-          const cachedIntro =
-            hasBackend && introSec > 0 ? getCachedIntroSync(track.id, introSec) : null;
+          const blobUrl = URL.createObjectURL(cachedIntro.blob);
+          deck.introBlobUrl = blobUrl;
+          deck.usingCachedIntro = true;
+          deck.introCachedDuration = cachedIntro.cachedDuration;
+          deck.pendingHandoff = false;
+          deck.handoffInFlight = false;
+          deck.pendingYTFallback = false;
 
-          const resolved = await resolveYouTubeAudioStream(track.youtubeId);
-          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
-            return;
-          }
+          const introAudio = deck.audio;
+          introAudio.removeAttribute('crossorigin');
+          introAudio.src = blobUrl;
+          introAudio.volume = Math.max(0, Math.min(1, initialVolume));
+          introAudio.loop = false;
 
-          if (resolved && resolved.url) {
-            setYtLoginSuggested(false);
-            if (resolved.duration && !deck.reportedFullDuration) {
-              deck.reportedFullDuration = resolved.duration;
-              if (activeDeckRef.current === deckIdx) {
-                setDuration(resolved.duration);
-                durationRef.current = resolved.duration;
+          if (startSeconds > 0) {
+            const applySeek = () => {
+              try {
+                introAudio.currentTime = startSeconds;
+              } catch {
+                // ignore
               }
+              introAudio.removeEventListener('loadedmetadata', applySeek);
+            };
+            introAudio.addEventListener('loadedmetadata', applySeek);
+          }
+
+          attachAudioElementListeners(deckIdx, introAudio, true);
+          routeElementWithFilterIfNeeded(introAudio, blobUrl, true);
+
+          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+            return;
+          }
+
+          await introAudio.play();
+
+          // Resolve full YouTube audio stream in the background while intro is already playing!
+          const sessionAtStart = expectedSessionId ?? deck.ownerSessionId;
+          (async () => {
+            const resolved = await resolveYouTubeAudioStream(videoId);
+            if (
+              deck.ownerSessionId !== sessionAtStart ||
+              deck.audio !== introAudio ||
+              !deck.usingCachedIntro ||
+              deck.track?.id !== track.id
+            ) {
+              return;
             }
 
-            // Instant 0ms start from cached intro while /api/youtube/stream preloads in background
-            if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.5)) {
-              deck.mode = 'audio';
+            if (resolved && resolved.url) {
+              setYtLoginSuggested(false);
+              if (resolved.duration && !deck.reportedFullDuration) {
+                deck.reportedFullDuration = resolved.duration;
+                if (activeDeckRef.current === deckIdx) {
+                  setDuration(resolved.duration);
+                  durationRef.current = resolved.duration;
+                }
+              }
               deck.activeAudioSrc = resolved.url;
-              if (activeDeckRef.current === deckIdx) {
-                setActiveDeckMode('audio');
-              }
-
-              const blobUrl = URL.createObjectURL(cachedIntro.blob);
-              deck.introBlobUrl = blobUrl;
-              deck.usingCachedIntro = true;
-              deck.introCachedDuration = cachedIntro.cachedDuration;
-              deck.pendingHandoff = false;
-              deck.handoffInFlight = false;
-
-              const introAudio = deck.audio;
-              introAudio.removeAttribute('crossorigin');
-              introAudio.src = blobUrl;
-              introAudio.volume = Math.max(0, Math.min(1, initialVolume));
-              introAudio.loop = false;
-
-              if (startSeconds > 0) {
-                const applySeek = () => {
-                  try {
-                    introAudio.currentTime = startSeconds;
-                  } catch {
-                    // ignore
-                  }
-                  introAudio.removeEventListener('loadedmetadata', applySeek);
-                };
-                introAudio.addEventListener('loadedmetadata', applySeek);
-              }
-
-              attachAudioElementListeners(deckIdx, introAudio, true);
-              routeElementWithFilterIfNeeded(introAudio, resolved.url, true);
 
               const fullAudio = new Audio();
               fullAudio.preload = 'auto';
@@ -1779,19 +1818,87 @@ export function useDualDeckPlayer() {
                   promoteFullAudioRef.current(deckIdx);
                 }
               };
+              fullAudio.onerror = () => {
+                if (deck.fullAudio === fullAudio) {
+                  deck.fullAudio = null;
+                  deck.pendingYTFallback = true;
+                  if (deck.pendingHandoff) {
+                    deck.usingCachedIntro = false;
+                    fallbackYouTubeToIframeRef.current(
+                      deckIdx,
+                      track,
+                      deck.introCachedDuration,
+                      deck.currentVolume
+                    );
+                  }
+                }
+              };
               fullAudio.src = resolved.url;
               fullAudio.load();
               deck.fullAudio = fullAudio;
 
-              if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
-                return;
+              if (deck.pendingHandoff) {
+                promoteFullAudioRef.current(deckIdx, deck.introCachedDuration);
               }
-              await introAudio.play();
-              return;
+            } else {
+              deck.pendingYTFallback = true;
+              if (resolved?.requiresLogin) {
+                setYtLoginSuggested(true);
+              }
+              if (deck.pendingHandoff) {
+                deck.usingCachedIntro = false;
+                fallbackYouTubeToIframeRef.current(
+                  deckIdx,
+                  track,
+                  deck.introCachedDuration,
+                  deck.currentVolume
+                );
+              }
             }
+          })();
 
-            if (hasBackend && introSec > 0) {
-              cacheTrackIntro(track, introSec);
+          return;
+        }
+
+        const hasBackend = await checkBackendAvailable();
+        if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+          return;
+        }
+
+        // Always prefer local same-origin audio stream when backend is running OR when any filter/EQ is active,
+        // so the local equalizer works instantaneously with 0 reloads!
+        if (hasBackend || needsFilterOrEq) {
+          audioFilterEngine.resume();
+          try {
+            deck.audio.removeAttribute('crossorigin');
+            deck.audio.src = SILENT_WAV_DATA_URI;
+            deck.audio.volume = 0;
+            await deck.audio.play();
+            deck.audio.pause();
+          } catch {
+            // ignore
+          }
+          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+            return;
+          }
+
+          if (hasBackend) {
+            cacheTrackIntro(track, introSec);
+          }
+
+          const resolved = await resolveYouTubeAudioStream(videoId);
+          if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
+            return;
+          }
+
+          if (resolved && resolved.url) {
+            setYtLoginSuggested(false);
+            if (resolved.duration && !deck.reportedFullDuration) {
+              deck.reportedFullDuration = resolved.duration;
+              if (activeDeckRef.current === deckIdx) {
+                setDuration(resolved.duration);
+                durationRef.current = resolved.duration;
+              }
             }
 
             try {
@@ -1807,7 +1914,7 @@ export function useDualDeckPlayer() {
               );
               return;
             } catch {
-              invalidateYouTubeAudioStream(track.youtubeId);
+              invalidateYouTubeAudioStream(videoId);
               deck.audio.pause();
               deck.audio.removeAttribute('src');
               deck.audio.load();
@@ -1844,7 +1951,8 @@ export function useDualDeckPlayer() {
       }
 
       if (track.source === 'local' || isLocalMediaUrl(track.url)) {
-        const playableUrl = await resolveLocalMediaUrl(track.url);
+        const syncUrl = getLocalMediaUrlSync(track.url);
+        const playableUrl = syncUrl || (await resolveLocalMediaUrl(track.url));
         if (expectedSessionId !== undefined && deck.ownerSessionId !== expectedSessionId) {
           return;
         }
@@ -1876,11 +1984,10 @@ export function useDualDeckPlayer() {
         hasCustomEq(equalizerRef.current);
 
       // Check if we have a cached X-second intro in IndexedDB/memory for instant 0ms start!
-      const introSec = introCacheSecRef.current;
-      const cachedIntro =
-        introSec > 0 ? getCachedIntroSync(track.id, introSec) : null;
+      const introSec = Math.max(5, introCacheSecRef.current);
+      const cachedIntro = getCachedIntroSync(track.id, 1);
 
-      if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.5)) {
+      if (cachedIntro && startSeconds < Math.max(1, cachedIntro.cachedDuration - 1.2)) {
         const blobUrl = URL.createObjectURL(cachedIntro.blob);
         deck.introBlobUrl = blobUrl;
         deck.usingCachedIntro = true;
@@ -2358,10 +2465,15 @@ export function useDualDeckPlayer() {
         deck.ytLastStartSeconds = clamped;
         deck.ytPlayer.seekTo(clamped, true);
       } else if (deck.usingCachedIntro && clamped >= Math.max(0, deck.introCachedDuration - 0.8)) {
-        // Jumping past cached intro: immediately promote full remote stream to handle seek
-        deck.pendingHandoff = true;
-        setIsBuffering(true);
-        promoteFullAudioRef.current(idx, clamped);
+        // Jumping past cached intro: promote full stream or hand off to YouTube IFrame if needed
+        if (deck.pendingYTFallback && deck.track?.source === 'youtube') {
+          deck.usingCachedIntro = false;
+          fallbackYouTubeToIframeRef.current(idx, deck.track, clamped, deck.currentVolume);
+        } else {
+          deck.pendingHandoff = true;
+          setIsBuffering(true);
+          promoteFullAudioRef.current(idx, clamped);
+        }
       } else {
         deck.audio.currentTime = clamped;
       }

@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
   Check,
+  Coffee,
+  ExternalLink,
+  Github,
   HardDrive,
   Palette,
   RotateCcw,
@@ -26,6 +29,8 @@ interface SettingsViewProps {
   onUpdate: (patch: Partial<AppAppearanceSettings>) => void;
   onReset: () => void;
 }
+
+const APP_VERSION = '1.0.0';
 
 const TEXT_SCALE_OPTIONS: { id: AppTextScale; label: string; hint: string }[] = [
   { id: 'compact', label: 'Compacto', hint: 'Más contenido visible' },
@@ -427,6 +432,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <span className="text-xs font-mono-tabular text-accent-light shrink-0">
           {formatBytes(localStats.totalBytes)}
         </span>
+      </section>
+
+      {/* Section 6: About RFA, Version, Creator & Support Links */}
+      <section className="rounded-2xl border border-white/10 bg-surface p-4 space-y-3.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-[#F2F0EB]">
+              RFA — Roll For Ambience
+            </h3>
+            <p className="text-xs text-[#9C988E] mt-0.5">
+              Creado por <strong className="font-medium text-[#F2F0EB]">NizaTF</strong> (Nico Talens)
+            </p>
+          </div>
+          <span className="px-2.5 py-1 rounded-lg border border-white/10 bg-canvas text-xs font-mono-tabular text-accent-light shrink-0">
+            v{APP_VERSION}
+          </span>
+        </div>
+
+        <p className="text-xs text-[#9C988E] leading-relaxed">
+          Reproductor gratuito de música ambiental y{' '}
+          <strong className="font-medium text-[#D6D2C8]">DnD soundboard</strong> para partidas de
+          Dungeons &amp; Dragons y juegos de rol. Incluye fundido cruzado instantáneo, filtros
+          acústicos, carpetas por escena, búsqueda de SFX y reproducción local sin conexión.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          <a
+            href="https://github.com/NizaTF/Roll-For-Ambience"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-[44px] px-3.5 py-2.5 rounded-xl border border-white/12 bg-elevated text-xs font-semibold text-[#F2F0EB] hover:border-accent/60 hover:text-accent-light inline-flex items-center justify-center gap-2 transition"
+          >
+            <Github className="w-4 h-4 shrink-0" />
+            <span>Proyecto en GitHub</span>
+            <ExternalLink className="w-3.5 h-3.5 opacity-60 shrink-0" />
+          </a>
+
+          <a
+            href="https://buymeacoffee.com/NizaTF"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-accent text-accent-contrast text-xs font-semibold hover:bg-accent-light inline-flex items-center justify-center gap-2 transition shadow-sm"
+          >
+            <Coffee className="w-4 h-4 shrink-0" />
+            <span>Cómprame un café</span>
+            <ExternalLink className="w-3.5 h-3.5 opacity-75 shrink-0" />
+          </a>
+        </div>
       </section>
     </div>
   );

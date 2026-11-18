@@ -70,7 +70,7 @@ interface PlayerDeckProps {
 }
 
 const CROSSFADE_OPTIONS = [0, 2, 4, 6, 8, 10];
-const INTRO_CACHE_OPTIONS = [0, 5, 8, 12, 15];
+const INTRO_CACHE_OPTIONS = [5, 8, 12, 15];
 
 export const PlayerDeck: React.FC<PlayerDeckProps> = ({
   currentTrack,
@@ -415,15 +415,17 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
         </div>
       </div>
 
-      {/* Instant intro cache selector */}
+      {/* Instant intro cache selector (always active) */}
       <div className="pt-2 border-t border-white/8 space-y-2">
         <div className="flex items-center justify-between text-xs">
-          <span className="text-[#C7C2B6] font-medium">Inicio instantáneo (precarga)</span>
+          <span className="text-[#C7C2B6] font-medium">
+            Inicio instantáneo (siempre activo)
+          </span>
           <span className="font-mono-tabular text-accent-light">
-            {introCacheSeconds === 0 ? 'Desactivado' : `${introCacheSeconds}s`}
+            {introCacheSeconds}s
           </span>
         </div>
-        <div className="grid grid-cols-5 gap-1">
+        <div className="grid grid-cols-4 gap-1.5">
           {INTRO_CACHE_OPTIONS.map((sec) => (
             <button
               key={sec}
@@ -435,7 +437,7 @@ export const PlayerDeck: React.FC<PlayerDeckProps> = ({
                   : 'border-white/8 bg-elevated/60 text-[#C7C2B6] hover:bg-elevated'
               }`}
             >
-              {sec === 0 ? 'Off' : `${sec}s`}
+              {sec}s
             </button>
           ))}
         </div>

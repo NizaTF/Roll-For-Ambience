@@ -41,8 +41,8 @@ declare global {
 
 const sw = self as unknown as SWGlobal;
 
-const SHELL_CACHE = 'rfa-app-shell-v2';
-const RUNTIME_ASSETS_CACHE = 'rfa-runtime-assets-v2';
+const SHELL_CACHE = 'rfa-app-shell-v3';
+const RUNTIME_ASSETS_CACHE = 'rfa-runtime-assets-v3';
 const SFX_CACHE = 'rfa-sfx-audio-v1';
 const MAX_SFX_ENTRIES = 45;
 const MAX_SFX_BYTES = 3_500_000;
@@ -66,6 +66,29 @@ function isAudioStreamRequest(url: URL, request: Request): boolean {
     return true;
   }
   return false;
+}
+
+function isViteDevAsset(url: URL): boolean {
+  const p = url.pathname;
+  if (
+    p.includes('/src/') ||
+    p.includes('/@vite') ||
+    p.includes('/@react-refresh') ||
+    p.includes('/@fs/') ||
+    p.includes('/@id/') ||
+    p.includes('/node_modules/') ||
+    (/\.(tsx?|jsx)(\?|$)/i.test(p) && !p.includes('/assets/'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isImmutableAsset(url: URL): boolean {
+  if (url.hostname === 'fonts.gstatic.com') return true;
+  return /\/assets\/.+-[A-Za-z0-9_-]{6,}\.(js|css|woff2?|png|jpg|jpeg|webp|svg)$/i.test(
+    url.pathname
+  );
 }
 
 function isCacheableShortAudio(url: URL, request: Request): boolean {
@@ -258,33 +281,41 @@ sw.addEventListener('fetch', (event: SWFetchEvent) => {
     return;
   }
 
-  // Same-origin static assets & Google Fonts: CacheFirst / StaleWhileRevalidate
+  // Same-origin static assets & Google Fonts
   const isSameOrigin = url.origin === sw.location.origin;
   const isFonts =
     url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
 
+  // Never cache Vite dev module files so edits appear immediately
+  if (isSameOrigin && isViteDevAsset(url)) {
+    return;
+  }
+
   if (isSameOrigin || isFonts) {
+    // Immutable hashed production bundles & font binaries: CacheFirst
+    if (isImmutableAsset(url)) {
+      event.respondWith(
+        (async () => {
+          const cached = await caches.match(request, { ignoreSearch: false });
+          if (cached) return cached;
+          try {
+            const res = await fetch(request);
+            if (res && (res.ok || res.type === 'opaque')) {
+              const runtime = await caches.open(RUNTIME_ASSETS_CACHE);
+              runtime.put(request, res.clone()).catch(() => {});
+            }
+            return res;
+          } catch {
+            return new Response(null, { status: 504 });
+          }
+        })()
+      );
+      return;
+    }
+
+    // Unhashed same-origin assets & font stylesheets: NetworkFirst with offline cache fallback
     event.respondWith(
       (async () => {
-        const shellMatch = await caches.match(request, { ignoreSearch: false });
-        if (shellMatch) {
-          // Background refresh non-hashed assets gently
-          if (
-            url.pathname.endsWith('.json') ||
-            url.pathname.endsWith('manifest.webmanifest')
-          ) {
-            fetch(request)
-              .then(async (res) => {
-                if (res && res.ok) {
-                  const runtime = await caches.open(RUNTIME_ASSETS_CACHE);
-                  await runtime.put(request, res);
-                }
-              })
-              .catch(() => {});
-          }
-          return shellMatch;
-        }
-
         try {
           const res = await fetch(request);
           if (res && (res.ok || res.type === 'opaque')) {
@@ -293,7 +324,10 @@ sw.addEventListener('fetch', (event: SWFetchEvent) => {
           }
           return res;
         } catch {
-          return (await caches.match(request, { ignoreSearch: true })) || new Response(null, { status: 504 });
+          return (
+            (await caches.match(request, { ignoreSearch: true })) ||
+            new Response(null, { status: 504 })
+          );
         }
       })()
     );

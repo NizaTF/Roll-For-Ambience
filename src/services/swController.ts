@@ -42,6 +42,9 @@ export function initServiceWorkerController(): void {
       },
       onRegisteredSW(_swUrl, registration) {
         if (!registration) return;
+        if (navigator.onLine) {
+          registration.update().catch(() => {});
+        }
         // Periodically check for updates gently in background
         window.setInterval(() => {
           if (navigator.onLine) {

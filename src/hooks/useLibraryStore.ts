@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STARTER_FOLDERS, STARTER_TRACKS } from '../data/starterLibrary';
+import { deleteCachedIntro } from '../services/introCache';
 import { deleteLocalMedia, isLocalMediaUrl } from '../services/localMedia';
 import {
   loadIndexedDBJSON,
@@ -222,6 +223,7 @@ export function useLibraryStore() {
         const removedTrack = prev.tracks[trackId];
         const nextTracks = { ...prev.tracks };
         delete nextTracks[trackId];
+        deleteCachedIntro(trackId);
         if (removedTrack && isLocalMediaUrl(removedTrack.url)) {
           const stillUsed = Object.values(nextTracks).some(
             (t) => t.url === removedTrack.url

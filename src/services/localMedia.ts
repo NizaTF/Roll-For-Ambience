@@ -146,6 +146,11 @@ export async function saveLocalAudioFile(
   };
 }
 
+export function getLocalMediaUrlSync(url: string): string | null {
+  if (!isLocalMediaUrl(url)) return url;
+  return objectUrlMemoryCache.get(url) || null;
+}
+
 export async function resolveLocalMediaUrl(url: string): Promise<string> {
   if (!isLocalMediaUrl(url)) return url;
 

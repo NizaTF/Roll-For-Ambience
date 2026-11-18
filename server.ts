@@ -1877,6 +1877,42 @@ async function startServer(): Promise<void> {
     res.status(404).json({ error: 'API route not found' });
   });
 
+  const resolvePublicBaseUrl = (req: Request): string => {
+    const envUrl = process.env.APP_URL?.trim();
+    if (envUrl) return envUrl.replace(/\/+$/, '');
+    const protoHeader = req.headers['x-forwarded-proto'];
+    const proto =
+      typeof protoHeader === 'string'
+        ? protoHeader.split(',')[0].trim()
+        : req.protocol || 'https';
+    const hostHeader = req.headers['x-forwarded-host'] || req.headers.host;
+    const host = typeof hostHeader === 'string' ? hostHeader.split(',')[0].trim() : `localhost:${PORT}`;
+    return `${proto}://${host}`;
+  };
+
+  app.get('/robots.txt', (req: Request, res: Response) => {
+    const baseUrl = resolvePublicBaseUrl(req);
+    res
+      .type('text/plain; charset=utf-8')
+      .send(`User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: ${baseUrl}/sitemap.xml\n`);
+  });
+
+  app.get('/sitemap.xml', (req: Request, res: Response) => {
+    const baseUrl = resolvePublicBaseUrl(req);
+    const lastMod = new Date().toISOString().split('T')[0];
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${baseUrl}/</loc>
+    <lastmod>${lastMod}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+`;
+    res.type('application/xml; charset=utf-8').send(xml);
+  });
+
   if (!IS_PROD) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

@@ -1,10 +1,11 @@
 import { Track } from '../types/audio';
 import { checkBackendAvailable } from './freeMusicApi';
-import { isLocalMediaUrl } from './localMedia';
+import { getLocalMediaUrlSync, isLocalMediaUrl, resolveLocalMediaUrl } from './localMedia';
 
 const CACHE_DB_NAME = 'rfa_intro_audio_cache_v1';
 const CACHE_STORE = 'intros';
-const MAX_CACHED_TRACKS = 75;
+const MAX_CACHED_TRACKS = 500;
+const FAILED_RETRY_COOLDOWN_MS = 45_000;
 
 export interface CachedIntroEntry {
   trackId: string;
@@ -17,8 +18,29 @@ export interface CachedIntroEntry {
 
 const memoryCache = new Map<string, CachedIntroEntry>();
 const inFlightCache = new Map<string, Promise<CachedIntroEntry | null>>();
+const failedAttempts = new Map<string, number>();
+const listeners = new Set<() => void>();
+
 let dbPromise: Promise<IDBDatabase | null> | null = null;
-let hydrated = false;
+let hydratePromise: Promise<void> | null = null;
+let activeWarmVersion = 0;
+
+function notifyListeners(): void {
+  for (const fn of listeners) {
+    try {
+      fn();
+    } catch {
+      // ignore listener errors
+    }
+  }
+}
+
+export function subscribeIntroCache(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 function openCacheDB(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
@@ -44,41 +66,106 @@ function openCacheDB(): Promise<IDBDatabase | null> {
 }
 
 export async function hydrateIntroCache(): Promise<void> {
-  if (hydrated) return;
-  hydrated = true;
+  if (hydratePromise) return hydratePromise;
 
-  try {
-    const db = await openCacheDB();
-    if (!db) return;
+  hydratePromise = (async () => {
+    try {
+      const db = await openCacheDB();
+      if (!db) return;
 
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(CACHE_STORE, 'readonly');
-      const req = tx.objectStore(CACHE_STORE).getAll();
-      req.onsuccess = () => {
-        const items = Array.isArray(req.result) ? (req.result as CachedIntroEntry[]) : [];
-        for (const item of items) {
-          if (item && item.trackId && item.blob instanceof Blob && item.cachedDuration > 1) {
-            memoryCache.set(item.trackId, item);
+      await new Promise<void>((resolve) => {
+        const tx = db.transaction(CACHE_STORE, 'readonly');
+        const req = tx.objectStore(CACHE_STORE).getAll();
+        req.onsuccess = () => {
+          const items = Array.isArray(req.result) ? (req.result as CachedIntroEntry[]) : [];
+          let added = 0;
+          for (const item of items) {
+            if (item && item.trackId && item.blob instanceof Blob && item.cachedDuration >= 0.8) {
+              if (!memoryCache.has(item.trackId)) {
+                memoryCache.set(item.trackId, item);
+                added += 1;
+              }
+            }
           }
-        }
-        resolve();
-      };
-      req.onerror = () => resolve();
-    });
-  } catch {
-    // ignore IDB read failures
-  }
+          if (added > 0) {
+            notifyListeners();
+          }
+          resolve();
+        };
+        req.onerror = () => resolve();
+      });
+    } catch {
+      // ignore IDB read failures
+    }
+  })();
+
+  return hydratePromise;
 }
 
 export function getCachedIntroSync(trackId: string, minSeconds = 1): CachedIntroEntry | null {
   const entry = memoryCache.get(trackId);
   if (!entry) return null;
-  if (entry.cachedDuration < Math.min(2, minSeconds)) return null;
+  if (entry.cachedDuration < Math.min(1.5, minSeconds)) return null;
   return entry;
+}
+
+export function isTrackInstantReadySync(track: Track, targetSeconds: number): boolean {
+  if (track.source === 'local' || isLocalMediaUrl(track.url)) {
+    return Boolean(getLocalMediaUrlSync(track.url));
+  }
+  const entry = memoryCache.get(track.id);
+  if (!entry || entry.url !== track.url) return false;
+  const requiredDur =
+    track.duration && track.duration > 0
+      ? Math.min(track.duration * 0.75, targetSeconds * 0.65, 3)
+      : Math.min(targetSeconds * 0.65, 3);
+  return entry.cachedDuration >= Math.max(0.8, requiredDur);
+}
+
+export function countInstantReadyTracks(tracks: Track[], targetSeconds: number): {
+  ready: number;
+  total: number;
+  warming: boolean;
+} {
+  let ready = 0;
+  for (const t of tracks) {
+    if (isTrackInstantReadySync(t, targetSeconds)) {
+      ready += 1;
+    }
+  }
+  return {
+    ready,
+    total: tracks.length,
+    warming: inFlightCache.size > 0,
+  };
+}
+
+export function clearIntroFailureCooldowns(): void {
+  failedAttempts.clear();
+}
+
+export async function deleteCachedIntro(trackId: string): Promise<void> {
+  memoryCache.delete(trackId);
+  failedAttempts.delete(trackId);
+  notifyListeners();
+
+  try {
+    const db = await openCacheDB();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(CACHE_STORE, 'readwrite');
+      tx.objectStore(CACHE_STORE).delete(trackId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore
+  }
 }
 
 async function saveCacheEntry(entry: CachedIntroEntry): Promise<void> {
   memoryCache.set(entry.trackId, entry);
+  failedAttempts.delete(entry.trackId);
 
   // Trim memory LRU if over limit
   if (memoryCache.size > MAX_CACHED_TRACKS) {
@@ -88,6 +175,8 @@ async function saveCacheEntry(entry: CachedIntroEntry): Promise<void> {
       memoryCache.delete(item.trackId);
     }
   }
+
+  notifyListeners();
 
   try {
     const db = await openCacheDB();
@@ -155,17 +244,49 @@ function probeBlobAudioDuration(blob: Blob): Promise<number> {
   });
 }
 
+function isIntroEntrySufficient(
+  entry: CachedIntroEntry | undefined,
+  track: Track,
+  introSeconds: number
+): boolean {
+  if (!entry || entry.url !== track.url) return false;
+  if (entry.introSeconds >= introSeconds) {
+    const minDur =
+      track.duration && track.duration > 0
+        ? Math.min(track.duration * 0.75, introSeconds * 0.7, 3)
+        : Math.min(introSeconds * 0.7, 3);
+    return entry.cachedDuration >= Math.max(0.8, minDur);
+  }
+  // If track itself is shorter than requested introSeconds and we already cached nearly the whole track
+  if (track.duration && track.duration > 0 && entry.cachedDuration >= track.duration * 0.85) {
+    return true;
+  }
+  return false;
+}
+
 export async function cacheTrackIntro(
   track: Track,
   introSeconds: number
 ): Promise<CachedIntroEntry | null> {
-  if (
-    introSeconds <= 0 ||
-    !track.url ||
-    track.source === 'local' ||
-    isLocalMediaUrl(track.url)
-  ) {
+  if (introSeconds <= 0 || !track.url) {
     return null;
+  }
+
+  if (track.source === 'local' || isLocalMediaUrl(track.url)) {
+    try {
+      await resolveLocalMediaUrl(track.url);
+      notifyListeners();
+    } catch {
+      // ignore missing local record
+    }
+    return null;
+  }
+
+  await hydrateIntroCache();
+
+  const existing = memoryCache.get(track.id);
+  if (isIntroEntrySufficient(existing, track, introSeconds)) {
+    return existing!;
   }
 
   const isYoutube = track.source === 'youtube' && Boolean(track.youtubeId);
@@ -174,24 +295,14 @@ export async function cacheTrackIntro(
     if (!hasBackend) return null;
   }
 
-  const existing = memoryCache.get(track.id);
-  if (
-    existing &&
-    existing.url === track.url &&
-    existing.introSeconds >= introSeconds &&
-    existing.cachedDuration >= Math.min(introSeconds * 0.8, 3)
-  ) {
-    return existing;
-  }
-
   const inflight = inFlightCache.get(track.id);
   if (inflight) return inflight;
 
   const task = (async (): Promise<CachedIntroEntry | null> => {
-    // ~44 KB/s handles up to 320 kbps MP3 + ID3 header comfortably
-    const targetBytes = Math.min(1_500_000, Math.max(260_000, introSeconds * 44_000 + 80_000));
+    // ~48 KB/s handles up to 320 kbps MP3 + embedded ID3 cover art comfortably
+    const targetBytes = Math.min(2_200_000, Math.max(380_000, introSeconds * 48_000 + 160_000));
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), isYoutube ? 14000 : 9000);
+    const timeoutId = window.setTimeout(() => controller.abort(), isYoutube ? 16000 : 10000);
 
     try {
       const fetchUrl = isYoutube
@@ -211,10 +322,14 @@ export async function cacheTrackIntro(
         signal: controller.signal,
       });
 
-      if (!res.ok) return null;
+      if (!res.ok) {
+        failedAttempts.set(track.id, Date.now());
+        return null;
+      }
 
       const contentType = res.headers.get('content-type');
       if (contentType && /text\/html|application\/json/i.test(contentType)) {
+        failedAttempts.set(track.id, Date.now());
         return null;
       }
 
@@ -250,7 +365,10 @@ export async function cacheTrackIntro(
         received = slice.byteLength;
       }
 
-      if (received < 16_000) return null;
+      if (received < 12_000) {
+        failedAttempts.set(track.id, Date.now());
+        return null;
+      }
 
       const merged = new Uint8Array(received);
       let offset = 0;
@@ -263,7 +381,11 @@ export async function cacheTrackIntro(
       const blob = new Blob([merged], { type: mime });
       const cachedDuration = await probeBlobAudioDuration(blob);
 
-      if (cachedDuration < 1.5) return null;
+      const minAcceptDur = track.duration && track.duration <= 3 ? 0.8 : 1.2;
+      if (cachedDuration < minAcceptDur) {
+        failedAttempts.set(track.id, Date.now());
+        return null;
+      }
 
       const entry: CachedIntroEntry = {
         trackId: track.id,
@@ -276,40 +398,74 @@ export async function cacheTrackIntro(
       await saveCacheEntry(entry);
       return entry;
     } catch {
+      failedAttempts.set(track.id, Date.now());
       return null;
     } finally {
       window.clearTimeout(timeoutId);
       inFlightCache.delete(track.id);
+      notifyListeners();
     }
   })();
 
   inFlightCache.set(track.id, task);
+  notifyListeners();
   return task;
 }
 
 export async function warmTracksIntroCache(
   tracks: Track[],
   introSeconds: number,
-  maxItems = 10
+  maxItems = Infinity
 ): Promise<void> {
-  if (introSeconds <= 0 || !navigator.onLine) return;
+  if (introSeconds <= 0 || tracks.length === 0) return;
+
+  const myVersion = ++activeWarmVersion;
+  await hydrateIntroCache();
+  if (myVersion !== activeWarmVersion) return;
+
+  // Deduplicate keeping priority order (active folder tracks first, then full library)
+  const seen = new Set<string>();
+  const uniqueTracks: Track[] = [];
+  for (const t of tracks) {
+    if (!t || !t.id || seen.has(t.id)) continue;
+    seen.add(t.id);
+    uniqueTracks.push(t);
+  }
+
+  // 1. Warm all local:// tracks into RAM object URLs first (instant, offline, 0 network)
+  const localTracks = uniqueTracks.filter(
+    (t) => (t.source === 'local' || isLocalMediaUrl(t.url)) && !getLocalMediaUrlSync(t.url)
+  );
+  if (localTracks.length > 0) {
+    await Promise.allSettled(localTracks.map((t) => resolveLocalMediaUrl(t.url)));
+    notifyListeners();
+  }
+
+  if (!navigator.onLine || myVersion !== activeWarmVersion) return;
 
   const hasBackend = await checkBackendAvailable();
-  const candidates = tracks
+  if (myVersion !== activeWarmVersion) return;
+
+  const now = Date.now();
+  const candidates = uniqueTracks
     .filter((t) => {
       if (!t.url || t.source === 'local' || isLocalMediaUrl(t.url)) return false;
       if (t.source === 'youtube' && !hasBackend) return false;
-      const cached = memoryCache.get(t.id);
-      return !cached || cached.introSeconds < introSeconds;
+      if (isIntroEntrySufficient(memoryCache.get(t.id), t, introSeconds)) return false;
+      const lastFail = failedAttempts.get(t.id);
+      if (lastFail && now - lastFail < FAILED_RETRY_COOLDOWN_MS) return false;
+      return true;
     })
     .slice(0, maxItems);
 
-  // Warm 2 at a time politely so playback bandwidth is never starved
+  if (candidates.length === 0) return;
+
+  // Warm 2 at a time politely so active playback bandwidth is never starved
   const CONCURRENCY = 2;
   let index = 0;
 
   const worker = async () => {
-    while (index < candidates.length) {
+    while (index < candidates.length && myVersion === activeWarmVersion) {
       const next = candidates[index++];
       if (next) {
         await cacheTrackIntro(next, introSeconds);

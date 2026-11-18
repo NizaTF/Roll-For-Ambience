@@ -59,6 +59,21 @@ export default function App() {
     }
   }, [activeTab]);
 
+  // Keep canonical & social card URLs synchronized with the active public deployment origin
+  useEffect(() => {
+    try {
+      const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+      const canonical = document.querySelector('link[rel="canonical"]');
+      if (canonical) canonical.setAttribute('href', cleanUrl);
+      const ogUrl = document.querySelector('meta[property="og:url"]');
+      if (ogUrl) ogUrl.setAttribute('content', cleanUrl);
+      const twUrl = document.querySelector('meta[name="twitter:url"]');
+      if (twUrl) twUrl.setAttribute('content', cleanUrl);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Notify Service Worker of active audio so updates never force-reload mid-playback and SW stays warm
   useEffect(() => {
     const active = player.isPlaying || soundboard.activeCount > 0;
@@ -149,14 +164,16 @@ export default function App() {
   }, [player.isPlaying, soundboard.activeCount]);
 
   const currentFolderTracks = library.getFolderTracks(library.selectedFolderId);
+  const allTracksSignature = library.allTracks.map((t) => `${t.id}:${t.url}`).join('|');
 
-  // Pre-warm first X seconds of tracks in the active folder so playback starts instantaneously
+  // Always keep the first X seconds of EVERY song across all folders pre-cached,
+  // prioritizing the active folder first for instantaneous track switching.
   useEffect(() => {
-    if (player.introCacheSeconds > 0 && currentFolderTracks.length > 0) {
-      player.warmTracks(currentFolderTracks);
+    if (library.allTracks.length > 0) {
+      player.warmTracks([...currentFolderTracks, ...library.allTracks]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [library.selectedFolderId, currentFolderTracks.length, player.introCacheSeconds]);
+  }, [library.selectedFolderId, allTracksSignature, player.introCacheSeconds, isOnline]);
 
   const cycleLoopMode = () => {
     const order: LoopMode[] = ['folder', 'track', 'none'];
@@ -406,6 +423,13 @@ export default function App() {
             </div>
           </aside>
         </div>
+
+        <footer className="mt-10 pt-4 border-t border-white/6 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#78746C]">
+          <span>
+            RFA — Roll For Ambience (Roll-For-Ambience) · DnD soundboard y música para rol
+          </span>
+          <span>Creado por NizaTF (Nico Talens)</span>
+        </footer>
       </main>
 
       {/* Mobile Bottom Dock (MiniPlayer + 3-Tab Thumb Navigation <= 112px total) */}

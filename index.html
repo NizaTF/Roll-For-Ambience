@@ -3,18 +3,163 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>RFA — Roll For Ambience</title>
+    <title>RFA — Roll For Ambience | DnD Soundboard y Música Rol</title>
     <meta
       name="description"
-      content="RFA (Roll For Ambience): reproductor gratuito de música para D&D con fundido cruzado, carpetas de campaña, buscador y soundboard táctil para Android."
+      content="RFA (Roll For Ambience) de Nico Talens: DnD soundboard gratis, música para rol con fundido cruzado, filtros acústicos, YouTube y audio local."
     />
-    <meta property="og:title" content="RFA — Roll For Ambience" />
+    <meta
+      name="keywords"
+      content="RFA, Roll For Ambience, Roll-For-Ambience, NizaTF, Nico Talens, DnD soundboard, D&D soundboard, soundboard rol, música para D&D, música para rol, TTRPG soundboard, tablero de sonidos rol, ambientación D&D, crossfade música rol, soundboard gratis"
+    />
+    <meta name="author" content="Nico Talens" />
+    <meta name="creator" content="Nico Talens" />
+    <meta name="application-name" content="RFA — Roll For Ambience" />
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+
+    <!-- OpenGraph Social Cards -->
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="es_ES" />
+    <meta property="og:site_name" content="RFA — Roll For Ambience" />
+    <meta property="og:title" content="RFA — Roll For Ambience | DnD Soundboard y Música Rol" />
     <meta
       property="og:description"
-      content="RFA (Roll For Ambience): reproductor gratuito de música para D&D con fundido cruzado, carpetas de campaña, buscador y soundboard táctil para Android."
+      content="RFA (Roll For Ambience) de Nico Talens: DnD soundboard gratis, música para rol con fundido cruzado, filtros acústicos, YouTube y audio local."
     />
-    <meta property="og:type" content="website" />
+    <meta property="og:image" content="./og-cover.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:alt" content="RFA — Roll For Ambience, DnD Soundboard y música para rol" />
+
+    <!-- Twitter / X Cards -->
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="RFA — Roll For Ambience | DnD Soundboard y Música Rol" />
+    <meta
+      name="twitter:description"
+      content="RFA (Roll For Ambience) de Nico Talens: DnD soundboard gratis, música para rol con fundido cruzado, filtros acústicos, YouTube y audio local."
+    />
+    <meta name="twitter:image" content="./og-cover.jpg" />
+    <meta name="twitter:image:alt" content="RFA — Roll For Ambience, DnD Soundboard y música para rol" />
+    <meta name="twitter:creator" content="Nico Talens" />
+
+    <!-- Dynamic Canonical & Social URL Resolution -->
+    <script>
+      (function () {
+        try {
+          var cleanUrl = window.location.origin + window.location.pathname;
+          var head = document.head;
+          var canonical = document.querySelector('link[rel="canonical"]');
+          if (!canonical) {
+            canonical = document.createElement('link');
+            canonical.setAttribute('rel', 'canonical');
+            head.appendChild(canonical);
+          }
+          canonical.setAttribute('href', cleanUrl);
+          var addOrUpdate = function (attr, key, val) {
+            var el = document.querySelector('meta[' + attr + '="' + key + '"]');
+            if (!el) {
+              el = document.createElement('meta');
+              el.setAttribute(attr, key);
+              head.appendChild(el);
+            }
+            el.setAttribute('content', val);
+          };
+          var absImg = new URL('./og-cover.jpg', cleanUrl).href;
+          addOrUpdate('property', 'og:url', cleanUrl);
+          addOrUpdate('name', 'twitter:url', cleanUrl);
+          addOrUpdate('property', 'og:image', absImg);
+          addOrUpdate('name', 'twitter:image', absImg);
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- Schema.org Structured Data (JSON-LD) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebApplication",
+            "name": "RFA — Roll For Ambience",
+            "alternateName": [
+              "RFA",
+              "Roll For Ambience",
+              "Roll-For-Ambience",
+              "RFA DnD Soundboard",
+              "Roll For Ambience Soundboard"
+            ],
+            "applicationCategory": "MultimediaApplication",
+            "operatingSystem": "All",
+            "inLanguage": "es",
+            "isAccessibleForFree": true,
+            "description": "RFA (Roll For Ambience) de Nico Talens: DnD soundboard gratuito y reproductor de música para rol y tabletop RPG con fundido cruzado instantáneo, filtros acústicos, ecualizador, YouTube y archivos locales.",
+            "keywords": "RFA, Roll For Ambience, Roll-For-Ambience, NizaTF, Nico Talens, DnD soundboard, D&D soundboard, música para D&D, música para rol, TTRPG audio",
+            "softwareVersion": "1.0.0",
+            "codeRepository": "https://github.com/NizaTF/Roll-For-Ambience",
+            "author": {
+              "@type": "Person",
+              "name": "Nico Talens",
+              "alternateName": "NizaTF",
+              "sameAs": [
+                "https://github.com/NizaTF",
+                "https://buymeacoffee.com/NizaTF"
+              ]
+            },
+            "creator": {
+              "@type": "Person",
+              "name": "Nico Talens",
+              "alternateName": "NizaTF"
+            },
+            "featureList": [
+              "DnD soundboard multitáctil con efectos de sonido y bucles",
+              "Fundido cruzado automático y manual entre canciones",
+              "Precarga instantánea de los primeros segundos de cada pista",
+              "Filtros acústicos en tiempo real (casa, puerta, cueva, bajo el agua, lejos) y ecualizador de 3 bandas",
+              "Carpetas temáticas de campaña con exportación e importación",
+              "Compatibilidad con música libre, YouTube y archivos locales sin conexión"
+            ],
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "EUR"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "¿Qué es RFA (Roll For Ambience / Roll-For-Ambience)?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "RFA (Roll For Ambience) es una aplicación web gratuita creada por Nico Talens que combina un reproductor de música por escenas y un DnD soundboard táctil para dirigir partidas de Dungeons & Dragons y otros juegos de rol."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "¿Funciona como DnD soundboard gratis y sin conexión?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Sí. RFA permite disparar varios efectos de sonido y ambientes en bucle a la vez, importar tus propios archivos MP3, WAV u OGG locales, y precargar los primeros segundos de cada canción para cambiar de escena al instante."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "¿Qué herramientas de audio incluye Roll For Ambience para D&D?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Incluye doble reproductor con crossfade suave, filtros acústicos configurables (como música detrás de una puerta, bajo el agua o en la distancia), ecualizador local, buscador de música y SFX, y personalización completa de la interfaz."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <!-- PWA & Icons -->
     <meta name="theme-color" content="#0D0E11" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -31,6 +176,21 @@
   </head>
   <body class="bg-canvas text-[#F2F0EB] antialiased selection:bg-accent/30 selection:text-accent-light">
     <div id="root"></div>
+    <noscript>
+      <main style="max-width:720px;margin:40px auto;padding:24px;font-family:sans-serif;color:#F2F0EB;">
+        <h1>RFA — Roll For Ambience (Roll-For-Ambience)</h1>
+        <p>
+          <strong>RFA (Roll For Ambience)</strong> es un <strong>DnD soundboard</strong> gratuito y
+          reproductor de música ambiental para Dungeons &amp; Dragons y juegos de rol, creado por
+          <strong>Nico Talens</strong>.
+        </p>
+        <p>
+          Organiza carpetas por escena, aplica fundido cruzado instantáneo, filtros acústicos en
+          directo, efectos de sonido multitáctiles, enlaces de YouTube y archivos locales sin
+          conexión. Activa JavaScript para usar la aplicación.
+        </p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
